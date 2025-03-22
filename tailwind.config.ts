@@ -1,16 +1,16 @@
 // tailwind.config.js
-import { nextui } from "@nextui-org/theme";
+import { heroui } from "@heroui/theme";
 
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
-    "./node_modules/@nextui-org/theme/dist/components/(button|ripple|spinner).js",
+    "./node_modules/@heroui/theme/dist/components/(button|ripple|spinner).js",
   ],
   theme: {
     extend: {},
   },
   darkMode: "class",
-  plugins: [nextui()],
+  plugins: [heroui()],
 };

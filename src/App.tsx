@@ -1,8 +1,8 @@
 import "./global.css";
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { NextUIProvider } from "@nextui-org/system";
-import { Button } from "@nextui-org/button";
+import { HeroUIProvider } from "@heroui/system";
+import { Button } from "@heroui/button";
 
 function App() {
   const [greetMsg, setGreetMsg] = useState("");
@@ -14,14 +14,14 @@ function App() {
   }
 
   return (
-    <NextUIProvider>
+    <HeroUIProvider>
       <h1 className="text-3xl font-bold underline">
         Hello world!
       </h1>
       <main className="container">
         <Button>TestButton</Button>
       </main>
-    </NextUIProvider>
+    </HeroUIProvider>
   );
 }
 
