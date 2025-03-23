@@ -3,6 +3,10 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { HeroUIProvider } from "@heroui/system";
 import { Button } from "@heroui/button";
+import Navbar from "./components/Navbar";
+import StreamInputDetails from "./components/StreamInputDetails";
+import { Divider } from "@heroui/divider";
+import StreamPreview from "./components/StreamPreview";
 
 function App() {
   const [greetMsg, setGreetMsg] = useState("");
@@ -15,12 +19,22 @@ function App() {
 
   return (
     <HeroUIProvider>
-      <h1 className="text-3xl font-bold underline">
-        Hello world!
-      </h1>
-      <main className="container">
-        <Button>TestButton</Button>
-      </main>
+      <div className="container mx-auto">
+        <Navbar />
+
+        <div className="mt-16">
+          <p>Stream Input</p>
+          <div className="flex">
+            <StreamInputDetails />
+            <Divider orientation="vertical" />
+            <StreamPreview />
+          </div>
+        </div>
+        <p>Stream Destination</p>
+        <div>
+
+        </div>
+      </div>
     </HeroUIProvider>
   );
 }
