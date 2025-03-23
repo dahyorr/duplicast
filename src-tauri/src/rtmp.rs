@@ -1,3 +1,4 @@
+use byteorder::{BigEndian, WriteBytesExt};
 use rml_rtmp::{
     handshake::{Handshake, HandshakeProcessResult, PeerType},
     sessions::{ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult},
@@ -181,11 +182,12 @@ async fn handle_session_event(
             //     timestamp.value,
             //     data.len()
             // );
-            // let mut stdin_lock = ffmpeg_stdin.lock().await;
+            let mut stdin_lock = ffmpeg_stdin.lock().await;
 
-            // if let Some(stdin) = stdin_lock.as_mut() {
-            //     stdin.write_all(&data).await?; // ✅ fully async
-            // }
+            if let Some(stdin) = stdin_lock.as_mut() {
+                let tag = flv_tag(0x08, timestamp.value, &data);
+                stdin.write_all(&tag).await?;
+            }
             Ok(vec![])
         }
 
@@ -200,7 +202,8 @@ async fn handle_session_event(
             let mut stdin_lock = ffmpeg_stdin.lock().await;
 
             if let Some(stdin) = stdin_lock.as_mut() {
-                stdin.write_all(&data).await?; // ✅ fully async
+                let tag = flv_tag(0x08, timestamp.value, &data);
+                stdin.write_all(&tag).await?;
             }
             Ok(vec![])
         }
@@ -260,7 +263,7 @@ async fn start_ffmpeg(
             "-f",
             "flv",
             "-i",
-            "-",
+            "pipe:0",
             "-c:v",
             "libx264",
             "-c:a",
@@ -268,9 +271,9 @@ async fn start_ffmpeg(
             "-f",
             "hls",
             "-hls_time",
-            "2",
+            "4",
             "-hls_list_size",
-            "5",
+            "6",
             "-hls_flags",
             "delete_segments",
             "./public/preview/playlist.m3u8",
@@ -283,5 +286,52 @@ async fn start_ffmpeg(
     let mut stdin_lock = ffmpeg_stdin.lock().await;
     *stdin_lock = ffmpeg.stdin.take();
 
+    if let Some(stdin) = stdin_lock.as_mut() {
+        let header = flv_header();
+        stdin.write_all(&header).await?;
+    }
+
     Ok(())
+}
+
+fn flv_header() -> Vec<u8> {
+    let mut header = Vec::new();
+
+    // Signature: "FLV"
+    header.extend_from_slice(b"FLV");
+
+    // Version: 1
+    header.push(0x01);
+
+    // Flags: 0x05 = audio + video
+    header.push(0x05);
+
+    // DataOffset: header size (9)
+    header.extend_from_slice(&[0x00, 0x00, 0x00, 0x09]);
+
+    // PreviousTagSize0: always 0
+    header.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+
+    header
+}
+
+fn flv_tag(tag_type: u8, timestamp: u32, data: &[u8]) -> Vec<u8> {
+    let mut tag = Vec::new();
+    let data_size = data.len() as u32;
+
+    // Tag header (11 bytes)
+    tag.push(tag_type); // 0x08 = audio, 0x09 = video
+
+    tag.write_u24::<BigEndian>(data_size).unwrap(); // DataSize
+    tag.write_u24::<BigEndian>(timestamp & 0xFFFFFF).unwrap(); // Timestamp (lower 24 bits)
+    tag.push(((timestamp >> 24) & 0xFF) as u8); // TimestampExtended
+    tag.write_u24::<BigEndian>(0).unwrap(); // StreamID (always 0)
+
+    // Payload
+    tag.extend_from_slice(data);
+
+    // PreviousTagSize
+    let total_size = 11 + data.len();
+    byteorder::WriteBytesExt::write_u32::<BigEndian>(&mut tag, total_size as u32).unwrap();
+    tag
 }
