@@ -202,7 +202,7 @@ async fn handle_session_event(
             let mut stdin_lock = ffmpeg_stdin.lock().await;
 
             if let Some(stdin) = stdin_lock.as_mut() {
-                let tag = flv_tag(0x08, timestamp.value, &data);
+                let tag = flv_tag(0x09, timestamp.value, &data);
                 stdin.write_all(&tag).await?;
             }
             Ok(vec![])
@@ -260,6 +260,8 @@ async fn start_ffmpeg(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut ffmpeg = Command::new("ffmpeg")
         .args([
+            // "-loglevel",
+            // "debug",
             "-f",
             "flv",
             "-i",
