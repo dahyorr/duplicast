@@ -24,7 +24,7 @@ function App() {
 
         <div className="mt-16">
           <p>Stream Input</p>
-          <div className="flex">
+          <div className="flex gap-2">
             <StreamInputDetails />
             <Divider orientation="vertical" />
             <StreamPreview />

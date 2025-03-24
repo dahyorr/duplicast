@@ -29,4 +29,5 @@ bytes = "1.10.1"
 hex = "0.4.3"
 rml_rtmp = "0.8.0"
 byteorder = "1.5.0"
+warp = "0.3.7"
 

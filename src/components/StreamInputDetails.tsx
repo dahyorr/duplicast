@@ -3,7 +3,7 @@ import { Snippet } from "@heroui/snippet"
 interface Props { }
 const StreamInputDetails = (props: Props) => {
   return (
-    <div>
+    <div className="flex-1">
       <div className="flex flex-col mb-2">
         <label>Stream URL</label>
         <Snippet >
@@ -12,7 +12,7 @@ const StreamInputDetails = (props: Props) => {
       </div>
 
       <div className="flex flex-col mb-2">
-        <label c>Stream Key</label>
+        <label >Stream Key</label>
         <Snippet>
           rtmp://localhost:8080
         </Snippet>
