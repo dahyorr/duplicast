@@ -3,30 +3,35 @@ import StreamInputDetails from "./StreamInputDetails";
 import { Divider } from "@heroui/divider";
 import StreamPreview from "./StreamPreview";
 import Loading from "./Loading";
+import useAppState from "../hooks/useAppState";
+import StreamDestinations from "./StreamDestinations";
 
 interface Props {
-  seversReady: boolean;
-  ports: { rtmp_port: number, file_port: number }
+
 }
-const MainPage = ({ seversReady, ports }: Props) => {
-  if (!seversReady) {
+const MainPage = ({ }: Props) => {
+  const { serversReady } = useAppState()
+  if (!serversReady) {
     return <Loading />
   }
   return (
     <div className="container mx-auto">
       <Navbar />
 
-      <div className="mt-16">
-        <p>Stream Input</p>
-        <div className="flex gap-2">
-          <StreamInputDetails rtmpPort={ports.rtmp_port}/>
-          <Divider orientation="vertical" />
-          <StreamPreview previewPort={ports.file_port}/>
+      <div className="flex flex-col gap-4">
+        <div className="mt-16">
+          <div className="flex gap-2 min-h-[300px]">
+            <StreamInputDetails />
+            <Divider orientation="vertical" />
+            <StreamPreview />
+          </div>
         </div>
-      </div>
-      <p>Stream Destination</p>
-      <div>
 
+        <Divider />
+
+        <div>
+          <StreamDestinations />
+        </div>
       </div>
     </div>
   )
