@@ -3,7 +3,15 @@ use rml_rtmp::{
     handshake::{Handshake, HandshakeProcessResult, PeerType},
     sessions::{ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult},
 };
-use std::{process::Stdio, sync::Arc};
+use std::{
+    fs,
+    path::PathBuf,
+    process::Stdio,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -11,12 +19,12 @@ use tokio::{
     sync::Mutex,
 };
 
-pub async fn init_rtmp_server() {
-    let listener = TcpListener::bind("0.0.0.0:1580")
+pub async fn init_rtmp_server(ready: Arc<AtomicBool>, port: u16) {
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", port))
         .await
         .expect("Failed to bind");
     println!("🟢 RTMP server listening on rtmp://localhost:1580");
-
+    ready.store(true, Ordering::SeqCst);
     loop {
         let (socket, addr) = listener.accept().await.expect("Failed to accept");
         println!("🔗 Connection from {}", addr);
@@ -258,6 +266,9 @@ async fn start_ffmpeg(
     // initial_data: Vec<u8>,
     ffmpeg_stdin: Arc<Mutex<Option<ChildStdin>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let out_dir = PathBuf::from("./hls_output");
+    let out_path = out_dir.join("playlist.m3u8");
+    fs::create_dir_all(out_dir)?;
     let mut ffmpeg = Command::new("ffmpeg")
         .args([
             // "-loglevel",
@@ -278,7 +289,7 @@ async fn start_ffmpeg(
             "6",
             "-hls_flags",
             "delete_segments",
-            "./public/preview/playlist.m3u8",
+            &out_path.to_string_lossy().to_string(),
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())

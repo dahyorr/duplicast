@@ -1,40 +1,65 @@
 import "./global.css";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { HeroUIProvider } from "@heroui/system";
-import { Button } from "@heroui/button";
-import Navbar from "./components/Navbar";
-import StreamInputDetails from "./components/StreamInputDetails";
-import { Divider } from "@heroui/divider";
-import StreamPreview from "./components/StreamPreview";
+
+import { listen } from "@tauri-apps/api/event";
+import MainPage from "./components/MainPage";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
+  const [ports, setPorts] = useState({ rtmp_port: 0, file_port: 0 });
+  const [serversReady, setServersReady] = useState(false);
+  // const [greetMsg, setGreetMsg] = useState("");
   const [name, setName] = useState("");
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
+  // async function greet() {
+  //   // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+  //   setGreetMsg(await invoke("greet", { name }));
+  // }
+
+  async function get_ports() {
+    setPorts(await invoke("get_ports"));
   }
+
+  async function check_if_ready() {
+    const ready = await invoke("check_if_ready");
+    if (ready) {
+      await get_ports();
+      setServersReady(true);
+      console.log("RTMP + File Server Ready ✅");
+    }
+  }
+
+  useEffect(() => {
+    const unlisten = listen("servers-ready", (event) => {
+      console.log("RTMP + File Server Ready ✅", event.payload);
+      setPorts(event.payload as any);
+      setServersReady(true);
+    });
+
+    return () => {
+      unlisten.then((u) => u());
+    };
+  })
+
+
+  useEffect(() => {
+    // call check if ready every 2 seconds
+    if(serversReady) return;
+    const interval = setInterval(() => {
+      check_if_ready();
+    }
+    , 2000);
+    return () => clearInterval(interval);
+  }, [serversReady]);
+
+  console.log(serversReady, ports, "wrwiejuhbt");
+
+
 
   return (
     <HeroUIProvider>
-      <div className="container mx-auto">
-        <Navbar />
-
-        <div className="mt-16">
-          <p>Stream Input</p>
-          <div className="flex gap-2">
-            <StreamInputDetails />
-            <Divider orientation="vertical" />
-            <StreamPreview />
-          </div>
-        </div>
-        <p>Stream Destination</p>
-        <div>
-
-        </div>
-      </div>
+      <MainPage seversReady={serversReady} ports={ports} />
     </HeroUIProvider>
   );
 }
