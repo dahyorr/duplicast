@@ -1,19 +1,21 @@
 mod config;
 mod db;
+mod events;
 mod file_server;
 mod rtmp;
 use std::sync::Arc;
 use tauri::{async_runtime, Manager};
-
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
 #[tauri::command]
 fn check_if_ready(state: tauri::State<'_, Arc<config::AppState>>) -> bool {
     state.is_ready()
+}
+
+#[tauri::command]
+fn check_if_stream_active(state: tauri::State<'_, Arc<config::AppState>>) -> bool {
+    state
+        .source_active
+        .load(std::sync::atomic::Ordering::SeqCst)
 }
 
 #[tauri::command]
@@ -26,14 +28,16 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_sql::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![greet, check_if_ready, get_ports])
+        .invoke_handler(tauri::generate_handler![
+            check_if_ready,
+            get_ports,
+            check_if_stream_active
+        ])
         .setup(|app| {
-            // let app_handle = app.handle().clone();
+            let app_handle = app.handle();
             let app_state = Arc::new(config::AppState::new(0, 0));
-            app.manage(app_state.clone());
-            let app_state_clone = app_state.clone();
-            // let app_handle_clone = app_handle.clone();
-
+            app.manage(app_state);
+            let app = app_handle.clone();
             async_runtime::spawn(async move {
                 let _ = db::init_db().await.expect("❌ Failed to init DB");
                 println!("✅ Database ready");
@@ -42,16 +46,15 @@ pub fn run() {
                 let port_info = config::get_or_init_ports(db_pool)
                     .await
                     .expect("❌ Failed to init ports");
-                let mut ports = app_state_clone.ports.lock().unwrap();
+                let app_state = app.state::<Arc<config::AppState>>();
+                let mut ports = app_state.ports.lock().unwrap();
                 ports.rtmp_port = port_info.rtmp_port;
                 ports.file_port = port_info.file_port;
-
-                let rtmp_notify = app_state_clone.rtmp_ready.clone();
-                let file_notify = app_state_clone.file_ready.clone();
-
-                async_runtime::spawn(rtmp::init_rtmp_server(rtmp_notify, port_info.rtmp_port));
+                let app_clone_rtmp: tauri::AppHandle = app.clone();
+                let app_clone_file: tauri::AppHandle = app.clone();
+                async_runtime::spawn(rtmp::init_rtmp_server(app_clone_rtmp, port_info.rtmp_port));
                 async_runtime::spawn(file_server::start_file_server(
-                    file_notify,
+                    app_clone_file,
                     port_info.file_port,
                 ));
 

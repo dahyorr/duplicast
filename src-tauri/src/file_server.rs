@@ -1,7 +1,9 @@
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use crate::config;
+use std::sync::{atomic::Ordering, Arc};
+use tauri::{AppHandle, Manager};
 use warp::Filter;
 
-pub async fn start_file_server(ready: Arc<AtomicBool>, port: u16) {
+pub async fn start_file_server(app: AppHandle, port: u16) {
     let preview_dir = warp::fs::dir("./hls-output");
     println!("🗂️  Starting file server...");
     let cors = warp::cors()
@@ -10,7 +12,8 @@ pub async fn start_file_server(ready: Arc<AtomicBool>, port: u16) {
         .allow_methods(vec!["GET", "HEAD", "OPTIONS"]);
 
     let routes = preview_dir.with(cors);
-    ready.store(true, Ordering::SeqCst);
+    let app_state = app.state::<Arc<config::AppState>>();
+    app_state.file_ready.store(true, Ordering::SeqCst);
     warp::serve(routes)
         .run(([127, 0, 0, 1], port)) // or choose your port
         .await;

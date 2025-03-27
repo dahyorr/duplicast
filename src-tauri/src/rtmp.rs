@@ -1,3 +1,4 @@
+use crate::events::AppEvents;
 use byteorder::{BigEndian, WriteBytesExt};
 use rml_rtmp::{
     handshake::{Handshake, HandshakeProcessResult, PeerType},
@@ -5,13 +6,11 @@ use rml_rtmp::{
 };
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Stdio,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::{atomic::Ordering, Arc},
 };
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -19,24 +18,29 @@ use tokio::{
     sync::Mutex,
 };
 
-pub async fn init_rtmp_server(ready: Arc<AtomicBool>, port: u16) {
+pub async fn init_rtmp_server(app: AppHandle, port: u16) {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", port))
         .await
         .expect("Failed to bind");
     println!("🟢 RTMP server listening on rtmp://localhost:1580");
-    ready.store(true, Ordering::SeqCst);
+    let app_state = app.state::<Arc<crate::config::AppState>>();
+    app_state.rtmp_ready.store(true, Ordering::SeqCst);
     loop {
         let (socket, addr) = listener.accept().await.expect("Failed to accept");
         println!("🔗 Connection from {}", addr);
+        let app_clone: AppHandle = app.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(socket).await {
+            if let Err(e) = handle_connection(app_clone.clone(), socket).await {
                 eprintln!("❌ Error: {}", e);
             }
         });
     }
 }
 
-async fn handle_connection(mut socket: TcpStream) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_connection(
+    app: AppHandle,
+    mut socket: TcpStream,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("📡 Handling new RTMP connection...");
 
     let mut handshake = Handshake::new(PeerType::Server);
@@ -62,7 +66,7 @@ async fn handle_connection(mut socket: TcpStream) -> Result<(), Box<dyn std::err
             }) => {
                 socket.write_all(&response_bytes).await?;
                 println!("✅ RTMP handshake complete 🤝");
-                return handle_session(socket, remaining_bytes.to_vec()).await;
+                return handle_session(&app, socket, remaining_bytes.to_vec()).await;
             }
 
             Err(e) => {
@@ -73,6 +77,7 @@ async fn handle_connection(mut socket: TcpStream) -> Result<(), Box<dyn std::err
 }
 
 async fn handle_session(
+    app: &AppHandle,
     mut socket: TcpStream,
     mut received_data: Vec<u8>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -116,7 +121,8 @@ async fn handle_session(
                         }
                         ServerSessionResult::RaisedEvent(event) => {
                             let stdin_clone = ffmpeg_stdin.clone();
-                            match handle_session_event(&mut session, event, stdin_clone).await {
+                            match handle_session_event(&app, &mut session, event, stdin_clone).await
+                            {
                                 Ok(responses) => {
                                     for res in responses {
                                         if let ServerSessionResult::OutboundResponse(packet) = res {
@@ -143,6 +149,7 @@ async fn handle_session(
     }
 }
 async fn handle_session_event(
+    app: &AppHandle,
     session: &mut ServerSession,
     event: ServerSessionEvent,
     ffmpeg_stdin: Arc<Mutex<Option<ChildStdin>>>,
@@ -172,6 +179,9 @@ async fn handle_session_event(
             match start_ffmpeg(ffmpeg_stdin).await {
                 Ok(_) => {
                     println!("🎥 FFMPEG started");
+                    app.emit(AppEvents::StreamStarted.as_str(), stream_key)?;
+                    let app_state = app.state::<Arc<crate::config::AppState>>();
+                    app_state.source_active.store(true, Ordering::SeqCst);
                     Ok(session.accept_request(request_id)?)
                 }
                 Err(e) => {
@@ -240,6 +250,12 @@ async fn handle_session_event(
             let mut stdin_lock = ffmpeg_stdin.lock().await;
             *stdin_lock = None; // Drop the handle so ffmpeg exits
 
+            app.emit(AppEvents::StreamStopped.as_str(), stream_key)?;
+
+            let output_dir = Path::new("./hls_output");
+            if output_dir.exists() {
+                fs::remove_dir_all(output_dir)?;
+            }
             // Optionally: clean up any associated buffers, files, etc.
 
             Ok(vec![])

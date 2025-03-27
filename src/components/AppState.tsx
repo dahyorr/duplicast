@@ -31,20 +31,38 @@ const AppStateProvider = ({ children }: PropsWithChildren) => {
       await get_ports();
       setServersReady(true);
       console.log("RTMP + File Server Ready ✅");
+      const sourceActive = await invoke("check_if_stream_active") as boolean;
+      setSourceActive(sourceActive);
     }
   }
 
   useEffect(() => {
-    const unlisten = listen("servers-ready", (event) => {
+    const unlistenPromise = listen("servers-ready", (event) => {
       console.log("RTMP + File Server Ready ✅", event.payload);
       setPorts(event.payload as any);
       setServersReady(true);
     });
 
     return () => {
-      unlisten.then((u) => u());
+      unlistenPromise.then((u) => u());
     };
-  })
+  }, []);
+
+  useEffect(() => {
+    const unlistenStreamActive = listen('stream-active', ({ payload }) => {
+      console.log('Stream started:', payload)
+      setSourceActive(true)
+    })
+    const unlistenStreamEnded = listen('stream-ended', ({ payload }) => {
+      console.log('Stream ended:', payload)
+      setSourceActive(false)
+    })
+    return () => {
+
+      unlistenStreamActive.then((u) => u());
+      unlistenStreamEnded.then((u) => u());
+    }
+  }, [])
 
 
   useEffect(() => {

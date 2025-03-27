@@ -13,9 +13,11 @@ pub struct PortInfo {
     pub file_port: u16,
 }
 
+#[derive(Debug)]
 pub struct AppState {
     pub rtmp_ready: Arc<AtomicBool>,
     pub file_ready: Arc<AtomicBool>,
+    pub source_active: Arc<AtomicBool>,
     pub ports: Arc<Mutex<PortInfo>>,
 }
 
@@ -23,6 +25,7 @@ impl AppState {
     pub fn new(rtmp_port: u16, file_port: u16) -> Self {
         Self {
             rtmp_ready: Arc::new(AtomicBool::new(false)),
+            source_active: Arc::new(AtomicBool::new(false)),
             file_ready: Arc::new(AtomicBool::new(false)),
             ports: Arc::new(Mutex::new(PortInfo {
                 rtmp_port,
