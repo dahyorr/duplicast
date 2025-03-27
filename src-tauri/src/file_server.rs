@@ -3,8 +3,10 @@ use std::sync::{atomic::Ordering, Arc};
 use tauri::{AppHandle, Manager};
 use warp::Filter;
 
+
 pub async fn start_file_server(app: AppHandle, port: u16) {
-    let preview_dir = warp::fs::dir("./hls-output");
+    std::fs::create_dir_all(config::hls_output_dir()).expect("Failed to create output dir");
+    let preview_dir = warp::fs::dir(config::hls_output_dir());
     println!("🗂️  Starting file server...");
     let cors = warp::cors()
         .allow_any_origin()

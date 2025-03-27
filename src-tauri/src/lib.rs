@@ -23,6 +23,38 @@ fn get_ports(state: tauri::State<'_, Arc<config::AppState>>) -> config::PortInfo
     state.ports.lock().unwrap().clone()
 }
 
+#[tauri::command]
+async fn add_relay_target(stream_key: String, url: String) -> Result<(), String> {
+    let pool = db::get_db_pool();
+    db::add_relay_target(&stream_key, &url, &pool)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_relay_targets() -> Result<Vec<db::RelayTarget>, String> {
+    let pool = db::get_db_pool();
+    db::get_relay_targets(&pool)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn toggle_relay_target(id: i64, active: bool) -> Result<(), String> {
+    let pool = db::get_db_pool();
+    db::toggle_relay_target(id, active, &pool)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remove_relay_target(id: i64) -> Result<(), String> {
+    let pool = db::get_db_pool();
+    db::remove_relay_target(id, &pool)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -31,7 +63,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             check_if_ready,
             get_ports,
-            check_if_stream_active
+            check_if_stream_active,
+            add_relay_target,
+            get_relay_targets,
+            toggle_relay_target,
+            remove_relay_target,
         ])
         .setup(|app| {
             let app_handle = app.handle();

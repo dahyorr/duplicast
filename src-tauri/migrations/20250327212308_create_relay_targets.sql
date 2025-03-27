@@ -1,0 +1,8 @@
+-- Add migration script here
+CREATE TABLE IF NOT EXISTS relay_targets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  stream_key TEXT NOT NULL,
+  url TEXT NOT NULL,
+  active BOOLEAN NOT NULL DEFAULT 1,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

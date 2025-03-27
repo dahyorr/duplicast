@@ -1,3 +1,4 @@
+use crate::config::{self};
 use crate::events::AppEvents;
 use byteorder::{BigEndian, WriteBytesExt};
 use rml_rtmp::{
@@ -6,11 +7,10 @@ use rml_rtmp::{
 };
 use std::{
     fs,
-    path::{Path, PathBuf},
     process::Stdio,
     sync::{atomic::Ordering, Arc},
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{async_runtime, AppHandle, Emitter, Manager};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -179,9 +179,25 @@ async fn handle_session_event(
             match start_ffmpeg(ffmpeg_stdin).await {
                 Ok(_) => {
                     println!("🎥 FFMPEG started");
-                    app.emit(AppEvents::StreamStarted.as_str(), stream_key)?;
-                    let app_state = app.state::<Arc<crate::config::AppState>>();
-                    app_state.source_active.store(true, Ordering::SeqCst);
+                    // wait for playlist to be created in new thread
+                    let app_clone = app.clone();
+                    async_runtime::spawn(async move {
+                        let playlist_path = config::hls_playlist_path();
+                        use tokio::time::{sleep, Duration};
+                        let mut attempts = 0;
+                        while !playlist_path.exists() && attempts < 50 {
+                            sleep(Duration::from_millis(500)).await;
+                            attempts += 1;
+                        }
+                        if playlist_path.exists() {
+                            println!("✅ FFMPEG started successfully");
+                            let _ = app_clone.emit(AppEvents::StreamStarted.as_str(), ());
+                        } else {
+                            eprintln!("⚠️ FFMPEG failed to create hls stream");
+                            let _ = app_clone.emit(AppEvents::StreamPreviewFailed.as_str(), ());
+                        }
+                    });
+
                     Ok(session.accept_request(request_id)?)
                 }
                 Err(e) => {
@@ -252,7 +268,7 @@ async fn handle_session_event(
 
             app.emit(AppEvents::StreamStopped.as_str(), stream_key)?;
 
-            let output_dir = Path::new("./hls_output");
+            let output_dir = config::hls_output_dir();
             if output_dir.exists() {
                 fs::remove_dir_all(output_dir)?;
             }
@@ -282,8 +298,8 @@ async fn start_ffmpeg(
     // initial_data: Vec<u8>,
     ffmpeg_stdin: Arc<Mutex<Option<ChildStdin>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let out_dir = PathBuf::from("./hls_output");
-    let out_path = out_dir.join("playlist.m3u8");
+    let out_dir = config::hls_output_dir();
+    let out_path = config::hls_playlist_path();
     fs::create_dir_all(out_dir)?;
     let mut ffmpeg = Command::new("ffmpeg")
         .args([
@@ -300,9 +316,9 @@ async fn start_ffmpeg(
             "-f",
             "hls",
             "-hls_time",
-            "4",
-            "-hls_list_size",
             "6",
+            "-hls_list_size",
+            "8",
             "-hls_flags",
             "delete_segments",
             &out_path.to_string_lossy().to_string(),

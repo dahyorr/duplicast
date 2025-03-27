@@ -51,6 +51,7 @@ const AppStateProvider = ({ children }: PropsWithChildren) => {
   useEffect(() => {
     const unlistenStreamActive = listen('stream-active', ({ payload }) => {
       console.log('Stream started:', payload)
+      // restart player
       setSourceActive(true)
     })
     const unlistenStreamEnded = listen('stream-ended', ({ payload }) => {

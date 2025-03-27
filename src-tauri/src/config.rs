@@ -1,6 +1,9 @@
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use serde::Serialize;
@@ -72,4 +75,12 @@ pub async fn get_or_init_ports(pool: &SqlitePool) -> Result<PortInfo, Box<dyn st
         rtmp_port,
         file_port,
     })
+}
+
+// store preview output path
+pub fn hls_output_dir() -> PathBuf {
+    PathBuf::from("./hls_output")
+}
+pub fn hls_playlist_path() -> PathBuf {
+    hls_output_dir().join("playlist.m3u8")
 }
