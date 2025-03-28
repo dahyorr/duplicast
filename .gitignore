@@ -24,4 +24,4 @@ dist-ssr
 *.sw?
 
 src-tauri/hls_output
-src-tauri/data
+# src-tauri/data
