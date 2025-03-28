@@ -1,14 +1,19 @@
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc,
     },
 };
 
 use serde::Serialize;
 use sqlx::{prelude::FromRow, SqlitePool};
-use tokio::net::TcpListener;
+use tokio::{
+    net::TcpListener,
+    process::Child,
+    sync::{broadcast, Mutex},
+};
 
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct PortInfo {
@@ -20,20 +25,29 @@ pub struct PortInfo {
 pub struct AppState {
     pub rtmp_ready: Arc<AtomicBool>,
     pub file_ready: Arc<AtomicBool>,
+    pub rtmp_active: AtomicBool,
     pub source_active: Arc<AtomicBool>,
     pub ports: Arc<Mutex<PortInfo>>,
+    pub relays: Mutex<HashMap<i64, Child>>,
+    pub relay_tx: broadcast::Sender<Vec<u8>>,
+    pub preview_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl AppState {
     pub fn new(rtmp_port: u16, file_port: u16) -> Self {
+        let (relay_tx, _) = broadcast::channel::<Vec<u8>>(128); // capacity can be tuned
         Self {
             rtmp_ready: Arc::new(AtomicBool::new(false)),
             source_active: Arc::new(AtomicBool::new(false)),
+            rtmp_active: AtomicBool::new(false),
             file_ready: Arc::new(AtomicBool::new(false)),
             ports: Arc::new(Mutex::new(PortInfo {
                 rtmp_port,
                 file_port,
             })),
+            relays: Mutex::new(HashMap::new()),
+            relay_tx,
+            preview_task: Mutex::new(None),
         }
     }
 
@@ -83,4 +97,13 @@ pub fn hls_output_dir() -> PathBuf {
 }
 pub fn hls_playlist_path() -> PathBuf {
     hls_output_dir().join("playlist.m3u8")
+}
+
+pub fn mask_key(key: &str) -> String {
+    if key.len() <= 4 {
+        "*".repeat(key.len())
+    } else {
+        let visible = &key[key.len() - 4..];
+        format!("{}{}", "*".repeat(key.len() - 4), visible)
+    }
 }

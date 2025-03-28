@@ -4,7 +4,7 @@ import { Divider } from "@heroui/divider";
 import StreamPreview from "./StreamPreview";
 import Loading from "./Loading";
 import useAppState from "../hooks/useAppState";
-import StreamDestinations from "./StreamDestinations";
+import StreamDestinations from "./RelayTargets";
 
 interface Props {
 

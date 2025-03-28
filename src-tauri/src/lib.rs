@@ -3,6 +3,7 @@ mod db;
 mod events;
 mod file_server;
 mod rtmp;
+use db::RelayTargetPublic;
 use std::sync::Arc;
 use tauri::{async_runtime, Manager};
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -19,24 +20,55 @@ fn check_if_stream_active(state: tauri::State<'_, Arc<config::AppState>>) -> boo
 }
 
 #[tauri::command]
-fn get_ports(state: tauri::State<'_, Arc<config::AppState>>) -> config::PortInfo {
-    state.ports.lock().unwrap().clone()
+async fn get_ports(
+    state: tauri::State<'_, Arc<config::AppState>>,
+) -> Result<config::PortInfo, String> {
+    Ok(state.ports.lock().await.clone())
 }
 
 #[tauri::command]
-async fn add_relay_target(stream_key: String, url: String) -> Result<(), String> {
+async fn start_all_relays(state: tauri::State<'_, Arc<config::AppState>>) -> Result<(), String> {
+    let _ = rtmp::start_relays(state.inner()).await;
+    Ok(())
+}
+
+// #[tauri::command]
+// async fn start_relay(app: AppHandle, url: String, stream_key: String) -> Result<(), String> {
+//     let _ = rtmp::start_relay(&app, url, stream_key.clone()).await?;
+//     Ok(())
+// }
+
+// async fn stop_relay(state: tauri::State<'_, Arc<config::AppState>>, id: i64) -> Result<(), String> {
+//     let mut relays = state.relays.lock().unwrap();
+
+//     if let Some(mut child) = relays.remove(&id) {
+//         let _ = child.kill().await;
+//         println!("🛑 Stopped relay with id {id}");
+//     }
+
+//     Ok(())
+// }
+
+#[tauri::command]
+async fn add_relay_target(stream_key: &str, url: &str, tag: &str) -> Result<(), String> {
     let pool = db::get_db_pool();
-    db::add_relay_target(&stream_key, &url, &pool)
+    db::add_relay_target(url, stream_key, tag, &pool)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn get_relay_targets() -> Result<Vec<db::RelayTarget>, String> {
+async fn get_relay_targets() -> Result<Vec<db::RelayTargetPublic>, String> {
     let pool = db::get_db_pool();
-    db::get_relay_targets(&pool)
+    let targets = db::get_relay_targets(&pool)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    let public_targets = targets
+        .iter()
+        .map(RelayTargetPublic::from_relay_target)
+        .collect();
+    Ok(public_targets)
 }
 
 #[tauri::command]
@@ -68,6 +100,7 @@ pub fn run() {
             get_relay_targets,
             toggle_relay_target,
             remove_relay_target,
+            start_all_relays
         ])
         .setup(|app| {
             let app_handle = app.handle();
@@ -83,7 +116,7 @@ pub fn run() {
                     .await
                     .expect("❌ Failed to init ports");
                 let app_state = app.state::<Arc<config::AppState>>();
-                let mut ports = app_state.ports.lock().unwrap();
+                let mut ports = app_state.ports.lock().await;
                 ports.rtmp_port = port_info.rtmp_port;
                 ports.file_port = port_info.file_port;
                 let app_clone_rtmp: tauri::AppHandle = app.clone();

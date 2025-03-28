@@ -1,21 +1,23 @@
 use crate::config::{self};
+use crate::db::{self};
 use crate::events::AppEvents;
 use byteorder::{BigEndian, WriteBytesExt};
 use rml_rtmp::{
     handshake::{Handshake, HandshakeProcessResult, PeerType},
     sessions::{ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult},
 };
+use tokio::fs::OpenOptions;
 use std::{
     fs,
     process::Stdio,
     sync::{atomic::Ordering, Arc},
 };
 use tauri::{async_runtime, AppHandle, Emitter, Manager};
+use tokio::process::Child;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    process::{ChildStdin, Command},
-    sync::Mutex,
+    process::Command,
 };
 
 pub async fn init_rtmp_server(app: AppHandle, port: u16) {
@@ -28,11 +30,20 @@ pub async fn init_rtmp_server(app: AppHandle, port: u16) {
     loop {
         let (socket, addr) = listener.accept().await.expect("Failed to accept");
         println!("🔗 Connection from {}", addr);
+        if app_state.rtmp_active.swap(true, Ordering::SeqCst) {
+            eprintln!("⚠️ Rejecting RTMP connection from {addr}: stream already in use");
+            drop(socket); // Close the connection
+            continue;
+        }
+        println!("🔗 Accepted RTMP connection from {addr}");
         let app_clone: AppHandle = app.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_connection(app_clone.clone(), socket).await {
                 eprintln!("❌ Error: {}", e);
             }
+            let state = app_clone.state::<Arc<config::AppState>>();
+            state.rtmp_active.store(false, Ordering::SeqCst);
+            println!("📴 RTMP connection ended");
         });
     }
 }
@@ -41,7 +52,7 @@ async fn handle_connection(
     app: AppHandle,
     mut socket: TcpStream,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    println!("📡 Handling new RTMP connection...");
+    println!("📡 Handling RTMP connection...");
 
     let mut handshake = Handshake::new(PeerType::Server);
     let mut buffer = [0u8; 4096];
@@ -88,8 +99,6 @@ async fn handle_session(
         Err(error) => return Err(error.to_string().into()),
     };
 
-    let ffmpeg_stdin: Arc<Mutex<Option<ChildStdin>>> = Arc::new(Mutex::new(None));
-
     for result in initial_session_results {
         if let ServerSessionResult::OutboundResponse(packet) = result {
             socket.write_all(&packet.bytes).await?;
@@ -100,7 +109,6 @@ async fn handle_session(
 
     loop {
         // Read more if we’ve exhausted the buffer
-
         if received_data.is_empty() {
             let n = socket.read(&mut buffer).await?;
             if n == 0 {
@@ -120,9 +128,7 @@ async fn handle_session(
                             socket.write_all(&packet.bytes).await?;
                         }
                         ServerSessionResult::RaisedEvent(event) => {
-                            let stdin_clone = ffmpeg_stdin.clone();
-                            match handle_session_event(&app, &mut session, event, stdin_clone).await
-                            {
+                            match handle_session_event(&app, &mut session, event).await {
                                 Ok(responses) => {
                                     for res in responses {
                                         if let ServerSessionResult::OutboundResponse(packet) = res {
@@ -148,11 +154,11 @@ async fn handle_session(
         }
     }
 }
+
 async fn handle_session_event(
     app: &AppHandle,
     session: &mut ServerSession,
     event: ServerSessionEvent,
-    ffmpeg_stdin: Arc<Mutex<Option<ChildStdin>>>,
 ) -> Result<Vec<ServerSessionResult>, Box<dyn std::error::Error + Send + Sync>> {
     // // create video file to stream into
     // let video_file = std::fs::File::create("public/preview/video.mp4")?;
@@ -170,13 +176,14 @@ async fn handle_session_event(
             );
             Ok(session.accept_request(request_id)?)
         }
+
         ServerSessionEvent::PublishStreamRequested {
             request_id,
             stream_key,
             ..
         } => {
             println!("📡 Publish requested for stream key: {}", stream_key);
-            match start_ffmpeg(ffmpeg_stdin).await {
+            match start_ffmpeg_preview(&app).await {
                 Ok(_) => {
                     println!("🎥 FFMPEG started");
                     // wait for playlist to be created in new thread
@@ -191,13 +198,13 @@ async fn handle_session_event(
                         }
                         if playlist_path.exists() {
                             println!("✅ FFMPEG started successfully");
-                            let _ = app_clone.emit(AppEvents::StreamStarted.as_str(), ());
+                            let _ = app_clone.emit(AppEvents::StreamPreviewActive.as_str(), ());
                         } else {
                             eprintln!("⚠️ FFMPEG failed to create hls stream");
                             let _ = app_clone.emit(AppEvents::StreamPreviewFailed.as_str(), ());
                         }
                     });
-
+                    let _ = app.emit(AppEvents::StreamActive.as_str(), ());
                     Ok(session.accept_request(request_id)?)
                 }
                 Err(e) => {
@@ -216,29 +223,42 @@ async fn handle_session_event(
             //     timestamp.value,
             //     data.len()
             // );
-            let mut stdin_lock = ffmpeg_stdin.lock().await;
 
-            if let Some(stdin) = stdin_lock.as_mut() {
-                let tag = flv_tag(0x08, timestamp.value, &data);
-                stdin.write_all(&tag).await?;
-            }
+            let tagged_data = flv_tag(0x08, timestamp.value, &data);
+
+            if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("video_dump.flv")
+            .await
+        {
+            let _ = file.write_all(&tagged_data).await;
+        }
+    
+            let _ = app
+                .state::<Arc<config::AppState>>()
+                .relay_tx
+                .send(tagged_data);
+
             Ok(vec![])
         }
 
         ServerSessionEvent::VideoDataReceived {
             data, timestamp, ..
         } => {
+            println!("{:?}", data);
             // println!(
             //     "🎥 Video packet @ {} ({} bytes)",
             //     timestamp.value,
             //     data.len()
             // );
-            let mut stdin_lock = ffmpeg_stdin.lock().await;
 
-            if let Some(stdin) = stdin_lock.as_mut() {
-                let tag = flv_tag(0x09, timestamp.value, &data);
-                stdin.write_all(&tag).await?;
-            }
+            let tagged_data = flv_tag(0x09, timestamp.value, &data);
+            let _ = app
+                .state::<Arc<config::AppState>>()
+                .relay_tx
+                .send(tagged_data);
+
             Ok(vec![])
         }
 
@@ -262,29 +282,11 @@ async fn handle_session_event(
                 app_name, stream_key
             );
             println!("🛑 Stream ended. Closing ffmpeg.");
-
-            let mut stdin_lock = ffmpeg_stdin.lock().await;
-            *stdin_lock = None; // Drop the handle so ffmpeg exits
-
-            app.emit(AppEvents::StreamStopped.as_str(), stream_key)?;
-
-            let output_dir = config::hls_output_dir();
-            if output_dir.exists() {
-                fs::remove_dir_all(output_dir)?;
-            }
+            stop_ffmpeg_preview(&app).await;
+            app.emit(AppEvents::StreamEnded.as_str(), stream_key)?;
             // Optionally: clean up any associated buffers, files, etc.
 
             Ok(vec![])
-        }
-
-        ServerSessionEvent::PlayStreamRequested {
-            request_id,
-            stream_key,
-            ..
-        } => {
-            // non applicable
-            println!("▶️ Play requested for stream key: {}", stream_key);
-            Ok(session.accept_request(request_id)?)
         }
 
         other => {
@@ -294,17 +296,15 @@ async fn handle_session_event(
     }
 }
 
-async fn start_ffmpeg(
+async fn start_ffmpeg_preview(
     // initial_data: Vec<u8>,
-    ffmpeg_stdin: Arc<Mutex<Option<ChildStdin>>>,
+    app: &AppHandle,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = config::hls_output_dir();
     let out_path = config::hls_playlist_path();
     fs::create_dir_all(out_dir)?;
     let mut ffmpeg = Command::new("ffmpeg")
         .args([
-            // "-loglevel",
-            // "debug",
             "-f",
             "flv",
             "-i",
@@ -328,15 +328,44 @@ async fn start_ffmpeg(
         .stderr(Stdio::inherit())
         .spawn()?;
 
-    let mut stdin_lock = ffmpeg_stdin.lock().await;
-    *stdin_lock = ffmpeg.stdin.take();
+    let mut stdin = ffmpeg.stdin.take().unwrap();
+    let mut rx = app.state::<Arc<config::AppState>>().relay_tx.subscribe();
 
-    if let Some(stdin) = stdin_lock.as_mut() {
-        let header = flv_header();
-        stdin.write_all(&header).await?;
-    }
+    let task = tokio::spawn(async move {
+        if stdin.write_all(&flv_header()).await.is_ok() {
+            while let Ok(tag) = rx.recv().await {
+                if stdin.write_all(&tag).await.is_err() {
+                    eprintln!("⚠️ Preview FFMPEG exited early");
+                    break;
+                }
+            }
+        }
+    });
+
+    let state = app.state::<Arc<config::AppState>>();
+    *state.preview_task.lock().await = Some(task);
 
     Ok(())
+}
+
+async fn stop_ffmpeg_preview(app: &AppHandle) {
+    let state = app.state::<Arc<config::AppState>>();
+    let mut task_guard = state.preview_task.lock().await;
+
+    if let Some(handle) = task_guard.take() {
+        handle.abort(); // cancels the running task
+        println!("🛑 Preview ffmpeg task stopped.");
+    }
+    app.emit(AppEvents::StreamPreviewEnded.as_str(), ())
+        .unwrap_or_else(|_| {
+            eprintln!("⚠️ Failed to emit stream preview stopped event");
+        });
+    let out_dir = config::hls_output_dir();
+    if out_dir.exists() {
+        fs::remove_dir_all(out_dir).unwrap_or_else(|_| {
+            eprintln!("⚠️ Failed to remove preview output directory");
+        });
+    }
 }
 
 fn flv_header() -> Vec<u8> {
@@ -379,4 +408,100 @@ fn flv_tag(tag_type: u8, timestamp: u32, data: &[u8]) -> Vec<u8> {
     let total_size = 11 + data.len();
     byteorder::WriteBytesExt::write_u32::<BigEndian>(&mut tag, total_size as u32).unwrap();
     tag
+}
+
+pub async fn start_relay(state: &Arc<config::AppState>, relay: &db::RelayTarget) {
+    let mut relays = state.relays.lock().await;
+
+    if relays.contains_key(&relay.id) {
+        eprintln!("⚠️ Relay  id:{} already exists", relay.id);
+        return;
+    }
+    match spawn_ffmpeg_relay(state, &relay.url, &relay.stream_key).await {
+        Ok(child) => {
+            relays.insert(relay.id, child);
+            println!("🟢 Started relay id:{}", relay.id);
+        }
+        Err(e) => eprintln!("❌ Failed to start relay id:{}: {}", relay.id, e),
+    }
+}
+
+pub async fn stop_relay(app: &AppHandle, id: i64) {
+    let state = app.state::<Arc<config::AppState>>();
+    let mut relays = state.relays.lock().await;
+    if let Some(mut child) = relays.remove(&id) {
+        if let Err(e) = child.kill().await {
+            eprintln!("⚠️ Failed to kill relay process: {}", e);
+        } else {
+            println!("🛑 Stopped relay id:{}", id);
+        }
+    } else {
+        println!("⚠️ Relay id:{} not found", id);
+    }
+}
+
+pub async fn start_relays(state: &Arc<config::AppState>) {
+    let pool = db::get_db_pool();
+    let targets = db::get_active_relay_targets(pool).await.unwrap_or_default();
+    print!("{:?}", targets);
+    for relay in targets {
+        start_relay(state, &relay).await;
+    }
+}
+
+async fn stop_relays(app: &AppHandle) {
+    let state = app.state::<Arc<config::AppState>>();
+    let mut relays = state.relays.lock().await;
+    for (_, child) in relays.iter_mut() {
+        if let Err(e) = child.kill().await {
+            eprintln!("⚠️ Failed to kill relay process: {}", e);
+        }
+    }
+    relays.clear();
+}
+
+async fn spawn_ffmpeg_relay(
+    state: &Arc<config::AppState>,
+    target_url: &str,
+    stream_key: &str,
+) -> Result<Child, Box<dyn std::error::Error>> {
+    let mut rx = state.relay_tx.subscribe();
+    let mut child = Command::new("ffmpeg")
+        .args([
+            "-f",
+            "flv",
+            "-i",
+            "pipe:0",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-tune",
+            "zerolatency",
+            "-c:a",
+            "aac",
+            "-f",
+            "flv",
+            &format!("{}/{}", target_url, stream_key),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+
+    let mut stdin = child.stdin.take().unwrap();
+    let url_clone = target_url.to_string();
+
+    tokio::spawn(async move {
+        if stdin.write_all(&flv_header()).await.is_ok() {
+            while let Ok(packet) = rx.recv().await {
+                if stdin.write_all(&packet).await.is_err() {
+                    eprintln!("⚠️ Relay to {} interrupted", url_clone);
+                    break;
+                }
+            }
+        }
+    });
+
+    Ok(child)
 }
