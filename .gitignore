@@ -24,4 +24,5 @@ dist-ssr
 *.sw?
 
 src-tauri/hls_output
-src-tauri/data/app.db
+src-tauri/data/**
+src-tauri/logs/**

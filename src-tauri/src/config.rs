@@ -11,8 +11,8 @@ use serde::Serialize;
 use sqlx::{prelude::FromRow, SqlitePool};
 use tokio::{
     net::TcpListener,
-    process::Child,
-    sync::{broadcast, Mutex},
+    process::{Child, ChildStdin, ChildStdout},
+    sync::Mutex,
 };
 
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -28,14 +28,21 @@ pub struct AppState {
     pub rtmp_active: AtomicBool,
     pub source_active: Arc<AtomicBool>,
     pub ports: Arc<Mutex<PortInfo>>,
-    pub relays: Mutex<HashMap<i64, Child>>,
-    pub relay_tx: broadcast::Sender<Vec<u8>>,
-    pub preview_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    pub relays: Mutex<HashMap<i64, RelayHandle>>,
+    pub encoder_process: Mutex<Option<Child>>,
+    pub encoder_stdin: Mutex<Option<ChildStdin>>,
+    pub encoder_stdout: Mutex<Option<ChildStdout>>,
+}
+
+#[derive(Debug)]
+pub struct RelayHandle {
+    pub id: i64,
+    pub process: Child,
+    pub stdin: ChildStdin,
 }
 
 impl AppState {
     pub fn new(rtmp_port: u16, file_port: u16) -> Self {
-        let (relay_tx, _) = broadcast::channel::<Vec<u8>>(128); // capacity can be tuned
         Self {
             rtmp_ready: Arc::new(AtomicBool::new(false)),
             source_active: Arc::new(AtomicBool::new(false)),
@@ -46,8 +53,9 @@ impl AppState {
                 file_port,
             })),
             relays: Mutex::new(HashMap::new()),
-            relay_tx,
-            preview_task: Mutex::new(None),
+            encoder_process: Mutex::new(None),
+            encoder_stdin: Mutex::new(None),
+            encoder_stdout: Mutex::new(None),
         }
     }
 
@@ -94,6 +102,9 @@ pub async fn get_or_init_ports(pool: &SqlitePool) -> Result<PortInfo, Box<dyn st
 // store preview output path
 pub fn hls_output_dir() -> PathBuf {
     PathBuf::from("./hls_output")
+}
+pub fn log_output_dir() -> PathBuf {
+    PathBuf::from("./logs")
 }
 pub fn hls_playlist_path() -> PathBuf {
     hls_output_dir().join("playlist.m3u8")

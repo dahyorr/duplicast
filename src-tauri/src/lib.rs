@@ -3,6 +3,10 @@ mod db;
 mod events;
 mod file_server;
 mod rtmp;
+mod encoder;
+mod utils;
+mod session;
+mod relay;
 use db::RelayTargetPublic;
 use std::sync::Arc;
 use tauri::{async_runtime, Manager};
@@ -104,7 +108,13 @@ pub fn run() {
         ])
         .setup(|app| {
             let app_handle = app.handle();
-            let app_state = Arc::new(config::AppState::new(0, 0));
+            let app_state = Arc::new
+            (config::AppState::new(0, 0));
+            let log_dir = config::log_output_dir();
+            // Create the log directory if it doesn't exist
+            if !log_dir.exists() {
+                std::fs::create_dir_all(&log_dir).expect("Failed to create log directory");
+            }
             app.manage(app_state);
             let app = app_handle.clone();
             async_runtime::spawn(async move {
