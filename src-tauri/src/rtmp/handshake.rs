@@ -1,5 +1,6 @@
+use super::session;
+
 use crate::config::{self};
-use crate::session::{self};
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use std::sync::{atomic::Ordering, Arc};
 use tauri::{AppHandle, Manager};

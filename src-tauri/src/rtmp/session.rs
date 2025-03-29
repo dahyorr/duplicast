@@ -1,11 +1,9 @@
-use crate::config::{self};
-use crate::encoder::{self};
-use crate::events::AppEvents;
-use crate::utils::{self};
+use super::{encoder, utils::flv_tag};
+
+use crate::{config, events::AppEvents};
 use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
 };
-
 use std::sync::Arc;
 use tauri::{async_runtime, AppHandle, Emitter, Manager};
 use tokio::{
@@ -140,8 +138,9 @@ async fn handle_session_event(
         ServerSessionEvent::AudioDataReceived {
             data, timestamp, ..
         } => {
+            println!("🎵 Audio data received: {} bytes", data.len());
             let state = app.state::<Arc<config::AppState>>();
-            let tagged_data = utils::flv_tag(0x08, timestamp.value, &data);
+            let tagged_data = flv_tag(0x08, timestamp.value, &data);
             let mut guard = state.encoder_stdin.lock().await;
             if let Some(stdin) = guard.as_mut() {
                 if let Err(e) = stdin.write_all(&tagged_data).await {
@@ -154,8 +153,9 @@ async fn handle_session_event(
         ServerSessionEvent::VideoDataReceived {
             data, timestamp, ..
         } => {
+            println!("📹 Video data received: {:?}", data);
             let state = app.state::<Arc<config::AppState>>();
-            let tagged_data = utils::flv_tag(0x09, timestamp.value, &data);
+            let tagged_data = flv_tag(0x09, timestamp.value, &data);
             let mut guard = state.encoder_stdin.lock().await;
             if let Some(stdin) = guard.as_mut() {
                 if let Err(e) = stdin.write_all(&tagged_data).await {

@@ -1,7 +1,10 @@
+use super::utils::flv_header;
+
 use crate::config::{self};
 use crate::events::AppEvents;
 use std::{fs, process::Stdio, sync::Arc};
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 pub async fn start_encoder(
@@ -9,7 +12,6 @@ pub async fn start_encoder(
     app: &AppHandle,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let log_dir = config::log_output_dir();
-    std::fs::create_dir_all(&log_dir);
     let log_file = std::fs::File::create(&log_dir.join("ffmpeg_encoder.log"))?;
     let log_file = Stdio::from(log_file);
 
@@ -22,24 +24,21 @@ pub async fn start_encoder(
     );
     let mut ffmpeg = Command::new("ffmpeg")
         .args([
-            "-f",
-            "flv",
-            "-i",
-            "pipe:0",
-            "-c:v",
-            "libx264",
-            "-c:a",
-            "aac",
-            "-f",
-            "tee"
-          // "hls",
-          // "-hls_time",
-          // "6",
-          // "-hls_list_size",
-          // "8",
-          // "-hls_flags",
-          // "delete_segments",
-          &output,
+            "-f","flv",
+            "-i","pipe:0",
+            "-map", "0:v",
+            "-map", "0:a",
+            "-c:v","libx264",
+            "-c:a","aac",
+            "-f","tee",
+            // "hls",
+            // "-hls_time",
+            // "6",
+            // "-hls_list_size",
+            // "8",
+            // "-hls_flags",
+            // "delete_segments",
+            output.as_str(),
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -48,9 +47,11 @@ pub async fn start_encoder(
 
     let mut stdin = ffmpeg.stdin.take().unwrap();
     let stdout = ffmpeg.stdout.take().unwrap();
-
     let state = app.state::<Arc<config::AppState>>();
-    *state.encoder_stdin.lock().await = Some(stdin);
+
+    if stdin.write_all(&flv_header()).await.is_ok() {
+        *state.encoder_stdin.lock().await = Some(stdin);
+    }
     *state.encoder_stdout.lock().await = Some(stdout);
     *state.encoder_process.lock().await = Some(ffmpeg);
     Ok(())
