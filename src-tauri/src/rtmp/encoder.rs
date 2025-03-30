@@ -1,10 +1,10 @@
-use super::{utils::flv_header, relay::start_fanout};
+use super::utils::flv_header;
 
 use crate::config::{self};
 use crate::events::AppEvents;
 use std::{fs, process::Stdio, sync::Arc};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 pub async fn start_encoder(
@@ -24,15 +24,24 @@ pub async fn start_encoder(
     );
     let mut ffmpeg = Command::new("ffmpeg")
         .args([
-            "-f","flv",
-            "-i","pipe:0",
-            "-map", "0:v",
-            "-map", "0:a",
-            "-c:v","libx264",
-            "-preset", "veryfast",
-            "-tune", "zerolatency",
-            "-c:a","aac",
-            "-f","tee",
+            "-f",
+            "flv",
+            "-i",
+            "pipe:0",
+            "-map",
+            "0:v",
+            "-map",
+            "0:a",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-tune",
+            "zerolatency",
+            "-c:a",
+            "aac",
+            "-f",
+            "tee",
             // "hls",
             // "-hls_time",
             // "6",
@@ -48,15 +57,32 @@ pub async fn start_encoder(
         .spawn()?;
 
     let mut stdin = ffmpeg.stdin.take().unwrap();
-    let stdout = ffmpeg.stdout.take().unwrap();
+    let mut stdout = ffmpeg.stdout.take().unwrap();
     let state = app.state::<Arc<config::AppState>>();
 
     if stdin.write_all(&flv_header()).await.is_ok() {
         *state.encoder_stdin.lock().await = Some(stdin);
     }
-    *state.encoder_stdout.lock().await = Some(stdout);
     *state.encoder_process.lock().await = Some(ffmpeg);
 
+    let tx = state.encoder_tx.clone();
+    // possibly store fanout task
+
+    tokio::spawn(async move {
+        let mut buf = [0u8; 4096];
+        loop {
+            match stdout.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    let _ = tx.send(buf[..n].to_vec()); // ignore lag errors
+                }
+                Err(e) => {
+                    eprintln!("❌ Encoder stdout read error: {}", e);
+                    break;
+                }
+            }
+        }
+    });
     Ok(())
 }
 
@@ -75,8 +101,6 @@ pub async fn stop_encoder(app: &AppHandle) {
             }
         }
     }
-    *state.encoder_stdout.lock().await = None;
-    // state.relays.lock().await.clear();
 
     app.emit(AppEvents::StreamPreviewEnded.as_str(), ())
         .unwrap_or_else(|_| {

@@ -11,8 +11,9 @@ use serde::Serialize;
 use sqlx::{prelude::FromRow, SqlitePool};
 use tokio::{
     net::TcpListener,
-    process::{Child, ChildStdin, ChildStdout},
-    sync::Mutex,
+    process::{Child, ChildStdin},
+    sync::{broadcast, Mutex},
+    task::JoinHandle,
 };
 
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -31,18 +32,20 @@ pub struct AppState {
     pub relays: Mutex<HashMap<i64, RelayHandle>>,
     pub encoder_process: Mutex<Option<Child>>,
     pub encoder_stdin: Mutex<Option<ChildStdin>>,
-    pub encoder_stdout: Mutex<Option<ChildStdout>>,
+    pub encoder_tx: broadcast::Sender<Vec<u8>>,
+    // pub metadata:
 }
 
 #[derive(Debug)]
 pub struct RelayHandle {
     pub id: i64,
     pub process: Child,
-    pub stdin: ChildStdin,
+    pub rx_task: JoinHandle<()>,
 }
 
 impl AppState {
     pub fn new(rtmp_port: u16, file_port: u16) -> Self {
+        let (encoder_tx, _) = broadcast::channel(512);
         Self {
             rtmp_ready: Arc::new(AtomicBool::new(false)),
             source_active: Arc::new(AtomicBool::new(false)),
@@ -55,7 +58,7 @@ impl AppState {
             relays: Mutex::new(HashMap::new()),
             encoder_process: Mutex::new(None),
             encoder_stdin: Mutex::new(None),
-            encoder_stdout: Mutex::new(None),
+            encoder_tx,
         }
     }
 

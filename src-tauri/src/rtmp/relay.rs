@@ -4,6 +4,7 @@ use crate::config::{self, RelayHandle};
 use crate::db::{self};
 use std::{process::Stdio, sync::Arc};
 use tauri::{AppHandle, Manager};
+use tokio::sync::broadcast::Sender;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     process::Command,
@@ -16,7 +17,8 @@ pub async fn start_relay(state: &Arc<config::AppState>, relay: &db::RelayTarget)
         eprintln!("⚠️ Relay  id:{} already exists", relay.id);
         return;
     }
-    match spawn_relay(relay.id, &relay.url, &relay.stream_key).await {
+    let encoder_tx = state.encoder_tx.clone();
+    match spawn_relay(relay.id, &relay.url, &relay.stream_key, encoder_tx).await {
         Ok(handle) => {
             relays.insert(relay.id, handle);
             println!("🟢 Started relay id:{}", relay.id);
@@ -46,7 +48,6 @@ pub async fn start_relays(state: &Arc<config::AppState>) {
     for relay in targets {
         start_relay(state, &relay).await;
     }
-    start_fanout(&state).await;
 }
 
 async fn stop_relays(app: &AppHandle) {
@@ -64,6 +65,7 @@ async fn spawn_relay(
     id: i64,
     target_url: &str,
     stream_key: &str,
+    encoder_tx: Sender<Vec<u8>>,
 ) -> Result<RelayHandle, Box<dyn std::error::Error>> {
     let log_dir = config::log_output_dir();
     let log_file = std::fs::File::create(log_dir.join(format!("relay_{id}.log")))?;
@@ -88,65 +90,23 @@ async fn spawn_relay(
         .stderr(log_file)
         .spawn()?;
 
-    let stdin = child.stdin.take().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut rx = encoder_tx.subscribe();
+
+    let task = tokio::spawn(async move {
+        if stdin.write_all(&flv_header()).await.is_ok() {
+            while let Ok(chunk) = rx.recv().await {
+                if let Err(e) = stdin.write_all(&chunk).await {
+                    eprintln!("⚠️ Relay write failed: {}", e);
+                    break;
+                }
+            }
+        }
+    });
 
     Ok(config::RelayHandle {
         id,
         process: child,
-        stdin,
+        rx_task: task,
     })
-}
-
-pub async fn start_fanout(state: &Arc<config::AppState>) {
-    // Clone the state before locking anything to avoid borrow checker issues.
-    let fanout_state = Arc::clone(&state);
-
-    // Move the stdout out of the Mutex inside a block scope.
-    let stdout = {
-        let mut guard = state.encoder_stdout.lock().await;
-        match guard.take() {
-            Some(s) => s,
-            None => {
-                eprintln!("⚠️ Fanout: encoder stdout not available");
-                return;
-            }
-        }
-    };
-
-    tokio::spawn(async move {
-        let mut stdout = stdout;
-        let mut buf = [0u8; 4096];
-        let mut first_write = true;
-        loop {
-            match stdout.read(&mut buf).await {
-                Ok(0) => {
-                    eprintln!("📴 Fanout: encoder stdout closed");
-                    break;
-                }
-                Ok(n) => {
-                    let data = &buf[..n];
-                    let mut relays = fanout_state.relays.lock().await;
-
-                    for (id, relay) in relays.iter_mut() {
-                        if first_write{
-                            // Write the FLV header to the relay stdin
-                            if let Err(e) = relay.stdin.write_all(&flv_header()).await {
-                                eprintln!("⚠️ Fanout: write to relay {} failed: {}", id, e);
-                            }
-                            first_write = false;
-                        }
-                        if let Err(e) = relay.stdin.write_all(data).await {
-                            eprintln!("⚠️ Fanout: write to relay {} failed: {}", id, e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("❌ Fanout: error reading from encoder stdout: {}", e);
-                    break;
-                }
-            }
-        }
-
-        println!("🔚 Fanout task ended");
-    });
 }
