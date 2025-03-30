@@ -1,8 +1,13 @@
+use super::utils::flv_header;
+
 use crate::config::{self, RelayHandle};
 use crate::db::{self};
 use std::{process::Stdio, sync::Arc};
 use tauri::{AppHandle, Manager};
-use tokio::process::Command;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::Command,
+};
 
 pub async fn start_relay(state: &Arc<config::AppState>, relay: &db::RelayTarget) {
     let mut relays = state.relays.lock().await;
@@ -41,6 +46,7 @@ pub async fn start_relays(state: &Arc<config::AppState>) {
     for relay in targets {
         start_relay(state, &relay).await;
     }
+    start_fanout(&state).await;
 }
 
 async fn stop_relays(app: &AppHandle) {
@@ -89,4 +95,58 @@ async fn spawn_relay(
         process: child,
         stdin,
     })
+}
+
+pub async fn start_fanout(state: &Arc<config::AppState>) {
+    // Clone the state before locking anything to avoid borrow checker issues.
+    let fanout_state = Arc::clone(&state);
+
+    // Move the stdout out of the Mutex inside a block scope.
+    let stdout = {
+        let mut guard = state.encoder_stdout.lock().await;
+        match guard.take() {
+            Some(s) => s,
+            None => {
+                eprintln!("⚠️ Fanout: encoder stdout not available");
+                return;
+            }
+        }
+    };
+
+    tokio::spawn(async move {
+        let mut stdout = stdout;
+        let mut buf = [0u8; 4096];
+        let mut first_write = true;
+        loop {
+            match stdout.read(&mut buf).await {
+                Ok(0) => {
+                    eprintln!("📴 Fanout: encoder stdout closed");
+                    break;
+                }
+                Ok(n) => {
+                    let data = &buf[..n];
+                    let mut relays = fanout_state.relays.lock().await;
+
+                    for (id, relay) in relays.iter_mut() {
+                        if first_write{
+                            // Write the FLV header to the relay stdin
+                            if let Err(e) = relay.stdin.write_all(&flv_header()).await {
+                                eprintln!("⚠️ Fanout: write to relay {} failed: {}", id, e);
+                            }
+                            first_write = false;
+                        }
+                        if let Err(e) = relay.stdin.write_all(data).await {
+                            eprintln!("⚠️ Fanout: write to relay {} failed: {}", id, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("❌ Fanout: error reading from encoder stdout: {}", e);
+                    break;
+                }
+            }
+        }
+
+        println!("🔚 Fanout task ended");
+    });
 }

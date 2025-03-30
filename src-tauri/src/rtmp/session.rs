@@ -138,7 +138,7 @@ async fn handle_session_event(
         ServerSessionEvent::AudioDataReceived {
             data, timestamp, ..
         } => {
-            println!("🎵 Audio data received: {} bytes", data.len());
+            // println!("🎵 Audio data received: {} bytes", data.len());
             let state = app.state::<Arc<config::AppState>>();
             let tagged_data = flv_tag(0x08, timestamp.value, &data);
             let mut guard = state.encoder_stdin.lock().await;
@@ -153,7 +153,7 @@ async fn handle_session_event(
         ServerSessionEvent::VideoDataReceived {
             data, timestamp, ..
         } => {
-            println!("📹 Video data received: {:?}", data);
+            // println!("📹 Video data received: {} bytes", data.len());
             let state = app.state::<Arc<config::AppState>>();
             let tagged_data = flv_tag(0x09, timestamp.value, &data);
             let mut guard = state.encoder_stdin.lock().await;

@@ -14,9 +14,11 @@ pub async fn init_db() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = Path::new(db_path).parent() {
         fs::create_dir_all(parent).expect("❌ Failed to create DB directory");
     }
+    let db_url = format!("sqlite://{}", db_path);
+    println!("📦 Creating DB file...");
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .connect(db_path)
+        .connect(&db_url)
         .await?;
 
     // Run migrations

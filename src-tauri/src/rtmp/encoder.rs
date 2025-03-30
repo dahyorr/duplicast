@@ -1,4 +1,4 @@
-use super::utils::flv_header;
+use super::{utils::flv_header, relay::start_fanout};
 
 use crate::config::{self};
 use crate::events::AppEvents;
@@ -29,6 +29,8 @@ pub async fn start_encoder(
             "-map", "0:v",
             "-map", "0:a",
             "-c:v","libx264",
+            "-preset", "veryfast",
+            "-tune", "zerolatency",
             "-c:a","aac",
             "-f","tee",
             // "hls",
@@ -54,6 +56,7 @@ pub async fn start_encoder(
     }
     *state.encoder_stdout.lock().await = Some(stdout);
     *state.encoder_process.lock().await = Some(ffmpeg);
+
     Ok(())
 }
 
@@ -63,13 +66,17 @@ pub async fn stop_encoder(app: &AppHandle) {
     *state.encoder_stdin.lock().await = None;
 
     if let Some(mut child) = process_guard.take() {
-        if let Err(e) = child.kill().await {
-            eprintln!("⚠️ Failed to kill encoder process: {}", e);
-        } else {
-            println!("🛑 Encoder process stopped");
+        match child.wait().await {
+            Ok(status) => {
+                println!("🛑 Encoder process exited with status: {}", status);
+            }
+            Err(e) => {
+                eprintln!("⚠️ Failed to wait on encoder process: {}", e);
+            }
         }
     }
     *state.encoder_stdout.lock().await = None;
+    // state.relays.lock().await.clear();
 
     app.emit(AppEvents::StreamPreviewEnded.as_str(), ())
         .unwrap_or_else(|_| {
