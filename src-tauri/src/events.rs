@@ -3,7 +3,7 @@ pub enum AppEvents {
     StreamPreviewActive,
     StreamActive,
     StreamPreviewFailed,
-    ServersReady,
+    // ServersReady,
     StreamEnded,
     StreamPreviewEnded,
 }
@@ -11,7 +11,7 @@ pub enum AppEvents {
 impl AppEvents {
     pub fn as_str(&self) -> &'static str {
         match self {
-            AppEvents::ServersReady => "servers-ready",
+            // AppEvents::ServersReady => "servers-ready",
             AppEvents::StreamActive => "stream-active",
             AppEvents::StreamPreviewActive => "stream-preview-active",
             AppEvents::StreamPreviewEnded => "stream-preview-ended",

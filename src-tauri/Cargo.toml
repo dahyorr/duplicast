@@ -32,3 +32,4 @@ byteorder = "1.5.0"
 warp = "0.3.7"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 sqlx = { version = "0.8.3", features = ["sqlite", "runtime-tokio", "macros"] }
+rml_amf0 = "0.3.0"

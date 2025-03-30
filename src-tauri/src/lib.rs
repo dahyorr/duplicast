@@ -33,6 +33,12 @@ async fn start_all_relays(state: tauri::State<'_, Arc<config::AppState>>) -> Res
     Ok(())
 }
 
+#[tauri::command]
+async fn stop_all_relays(state: tauri::State<'_, Arc<config::AppState>>) -> Result<(), String> {
+    let _ = relay::stop_relays(state.inner()).await;
+    Ok(())
+}
+
 // #[tauri::command]
 // async fn start_relay(app: AppHandle, url: String, stream_key: String) -> Result<(), String> {
 //     let _ = rtmp::start_relay(&app, url, stream_key.clone()).await?;
@@ -101,7 +107,8 @@ pub fn run() {
             get_relay_targets,
             toggle_relay_target,
             remove_relay_target,
-            start_all_relays
+            start_all_relays,
+            stop_all_relays,
         ])
         .setup(|app| {
             let app_handle = app.handle();

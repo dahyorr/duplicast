@@ -7,6 +7,7 @@ use std::{
     },
 };
 
+use rml_rtmp::sessions::StreamMetadata;
 use serde::Serialize;
 use sqlx::{prelude::FromRow, SqlitePool};
 use tokio::{
@@ -28,11 +29,13 @@ pub struct AppState {
     pub file_ready: Arc<AtomicBool>,
     pub rtmp_active: AtomicBool,
     pub source_active: Arc<AtomicBool>,
+    pub source_metadata: Mutex<Option<StreamMetadata>>,
     pub ports: Arc<Mutex<PortInfo>>,
     pub relays: Mutex<HashMap<i64, RelayHandle>>,
     pub encoder_process: Mutex<Option<Child>>,
     pub encoder_stdin: Mutex<Option<ChildStdin>>,
     pub encoder_tx: broadcast::Sender<Vec<u8>>,
+    pub encoder_sequence_headers: Mutex<Vec<Vec<u8>>>,
     // pub metadata:
 }
 
@@ -59,6 +62,8 @@ impl AppState {
             encoder_process: Mutex::new(None),
             encoder_stdin: Mutex::new(None),
             encoder_tx,
+            source_metadata: Mutex::new(None),
+            encoder_sequence_headers: Mutex::new(vec![]),
         }
     }
 

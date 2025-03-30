@@ -1,6 +1,13 @@
-use super::{encoder, utils::flv_tag};
+use super::{
+    encoder,
+    utils::{flv_tag, FlvTagType},
+};
 
-use crate::{config, events::AppEvents};
+use crate::{
+    config,
+    events::AppEvents,
+    rtmp::{relay, utils::create_metadata_tag},
+};
 use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
 };
@@ -140,7 +147,7 @@ async fn handle_session_event(
         } => {
             // println!("🎵 Audio data received: {} bytes", data.len());
             let state = app.state::<Arc<config::AppState>>();
-            let tagged_data = flv_tag(0x08, timestamp.value, &data);
+            let tagged_data = flv_tag(FlvTagType::Audio, timestamp.value, &data);
             let mut guard = state.encoder_stdin.lock().await;
             if let Some(stdin) = guard.as_mut() {
                 if let Err(e) = stdin.write_all(&tagged_data).await {
@@ -155,7 +162,7 @@ async fn handle_session_event(
         } => {
             // println!("📹 Video data received: {} bytes", data.len());
             let state = app.state::<Arc<config::AppState>>();
-            let tagged_data = flv_tag(0x09, timestamp.value, &data);
+            let tagged_data = flv_tag(FlvTagType::Video, timestamp.value, &data);
             let mut guard = state.encoder_stdin.lock().await;
             if let Some(stdin) = guard.as_mut() {
                 if let Err(e) = stdin.write_all(&tagged_data).await {
@@ -171,17 +178,15 @@ async fn handle_session_event(
             ..
         } => {
             println!("📊 Metadata for stream {}: {:?}", stream_key, metadata);
-            // if let Ok(mut file) = OpenOptions::new()
-            //     .create(true)
-            //     .append(true)
-            //     .open("metadata_dump.txt")
-            //     .await
-            // {
-            //     if let Ok(json) = to_string_pretty(&metadata) {
-            //         let _ = file.write_all(json.as_bytes()).await;
-            //         let _ = file.write_all(b"\n").await;
-            //     }
-            // }
+            let tagged_data = create_metadata_tag(&metadata);
+            let state = app.state::<Arc<config::AppState>>();
+            let mut guard = state.encoder_stdin.lock().await;
+            if let Some(stdin) = guard.as_mut() {
+                if let Err(e) = stdin.write_all(&tagged_data).await {
+                    eprintln!("❌ Failed to write to encoder stdin: {}", e);
+                }
+            }
+            *state.source_metadata.lock().await = Some(metadata.clone());
             // println!("Metadata: {}", metadata.());
             Ok(vec![])
         }
@@ -196,6 +201,7 @@ async fn handle_session_event(
                 app_name, stream_key
             );
             println!("🛑 Stream ended. Closing ffmpeg.");
+            relay::stop_relays(&app.state::<Arc<config::AppState>>()).await;
             encoder::stop_encoder(&app).await;
             app.emit(AppEvents::StreamEnded.as_str(), stream_key)?;
             // Optionally: clean up any associated buffers, files, etc.

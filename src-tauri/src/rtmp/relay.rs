@@ -3,22 +3,16 @@ use super::utils::flv_header;
 use crate::config::{self, RelayHandle};
 use crate::db::{self};
 use std::{process::Stdio, sync::Arc};
-use tauri::{AppHandle, Manager};
-use tokio::sync::broadcast::Sender;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    process::Command,
-};
+use tokio::{io::AsyncWriteExt, process::Command};
 
 pub async fn start_relay(state: &Arc<config::AppState>, relay: &db::RelayTarget) {
     let mut relays = state.relays.lock().await;
 
     if relays.contains_key(&relay.id) {
-        eprintln!("⚠️ Relay  id:{} already exists", relay.id);
+        eprintln!("⚠️ Relay id:{} already exists", relay.id);
         return;
     }
-    let encoder_tx = state.encoder_tx.clone();
-    match spawn_relay(relay.id, &relay.url, &relay.stream_key, encoder_tx).await {
+    match spawn_relay(relay.id, &relay.url, &relay.stream_key, state).await {
         Ok(handle) => {
             relays.insert(relay.id, handle);
             println!("🟢 Started relay id:{}", relay.id);
@@ -27,17 +21,12 @@ pub async fn start_relay(state: &Arc<config::AppState>, relay: &db::RelayTarget)
     }
 }
 
-pub async fn stop_relay(app: &AppHandle, id: i64) {
-    let state = app.state::<Arc<config::AppState>>();
+pub async fn stop_relay(state: &Arc<config::AppState>, id: i64) {
     let mut relays = state.relays.lock().await;
     if let Some(mut handle) = relays.remove(&id) {
-        if let Err(e) = handle.process.kill().await {
-            eprintln!("⚠️ Failed to kill relay process: {}", e);
-        } else {
-            println!("🛑 Stopped relay id:{}", id);
-        }
-    } else {
-        println!("⚠️ Relay id:{} not found", id);
+        handle.rx_task.abort();
+        let _ = handle.process.kill().await;
+        println!("🛑 Stopped relay id: {}", id);
     }
 }
 
@@ -50,13 +39,10 @@ pub async fn start_relays(state: &Arc<config::AppState>) {
     }
 }
 
-async fn stop_relays(app: &AppHandle) {
-    let state = app.state::<Arc<config::AppState>>();
+pub async fn stop_relays(state: &Arc<config::AppState>) {
     let mut relays = state.relays.lock().await;
-    for (_, handle) in relays.iter_mut() {
-        if let Err(e) = handle.process.kill().await {
-            eprintln!("⚠️ Failed to kill relay process: {}", e);
-        }
+    for (_, handle) in relays.iter() {
+        stop_relay(state, handle.id).await;
     }
     relays.clear();
 }
@@ -65,7 +51,7 @@ async fn spawn_relay(
     id: i64,
     target_url: &str,
     stream_key: &str,
-    encoder_tx: Sender<Vec<u8>>,
+    state: &Arc<config::AppState>,
 ) -> Result<RelayHandle, Box<dyn std::error::Error>> {
     let log_dir = config::log_output_dir();
     let log_file = std::fs::File::create(log_dir.join(format!("relay_{id}.log")))?;
@@ -91,15 +77,20 @@ async fn spawn_relay(
         .spawn()?;
 
     let mut stdin = child.stdin.take().unwrap();
+    let encoder_tx = state.encoder_tx.clone();
     let mut rx = encoder_tx.subscribe();
 
+    let headers = state.encoder_sequence_headers.lock().await.clone();
+    stdin.write_all(&flv_header()).await?;
+    for tag in headers {
+        println!("{:?}", tag);
+        stdin.write_all(&tag).await?;
+    }
     let task = tokio::spawn(async move {
-        if stdin.write_all(&flv_header()).await.is_ok() {
-            while let Ok(chunk) = rx.recv().await {
-                if let Err(e) = stdin.write_all(&chunk).await {
-                    eprintln!("⚠️ Relay write failed: {}", e);
-                    break;
-                }
+        while let Ok(chunk) = rx.recv().await {
+            if let Err(e) = stdin.write_all(&chunk).await {
+                eprintln!("⚠️ Relay write failed: {}", e);
+                break;
             }
         }
     });

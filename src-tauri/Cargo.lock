@@ -824,6 +824,7 @@ dependencies = [
  "env_logger",
  "hex",
  "log",
+ "rml_amf0",
  "rml_rtmp",
  "serde",
  "serde_json",
