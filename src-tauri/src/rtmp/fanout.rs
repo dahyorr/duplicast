@@ -30,9 +30,6 @@ pub async fn start_fanout(
                     headers.push(chunk.to_vec());
                 }
                 let relay_channels = state.relay_channels.lock().await;
-                if relay_channels.is_empty() {
-                    println!("ℹ️ No relays currently active");
-                }
                 for (id, tx) in relay_channels.iter() {
                     if let Err(e) = tx.send(Arc::clone(&chunk)).await {
                         eprintln!("⚠️ Failed to send to relay {}: {}", id, e);
