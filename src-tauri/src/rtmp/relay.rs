@@ -83,7 +83,6 @@ async fn spawn_relay(
     let headers = state.encoder_sequence_headers.lock().await.clone();
     stdin.write_all(&flv_header()).await?;
     for tag in headers {
-        println!("{:?}", tag);
         stdin.write_all(&tag).await?;
     }
     let task = tokio::spawn(async move {

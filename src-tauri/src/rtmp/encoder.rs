@@ -35,12 +35,18 @@ pub async fn start_encoder(
             "0:a",
             "-c:v",
             "libx264",
+            "-b:v",
+            "6000k",
+            "-bufsize",
+            "8000k",
             "-preset",
             "veryfast",
             "-tune",
             "zerolatency",
             "-c:a",
             "aac",
+            "-b:a",
+            "160k",
             "-f",
             "tee",
             // "hls",
@@ -67,9 +73,9 @@ pub async fn start_encoder(
     *state.encoder_process.lock().await = Some(ffmpeg);
 
     let tx = state.encoder_tx.clone();
-    let cloned_state = Arc::clone(&state);     
+    let cloned_state = Arc::clone(&state);
     // possibly store fanout task
-    
+
     tokio::spawn(async move {
         let mut buf = [0u8; 4096];
         loop {

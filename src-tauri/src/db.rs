@@ -111,10 +111,3 @@ pub async fn remove_relay_target(id: i64, pool: &SqlitePool) -> Result<(), sqlx:
         .await?;
     Ok(())
 }
-
-pub async fn get_relay_target(id: i64, pool: &SqlitePool) -> Result<RelayTarget, sqlx::Error> {
-    sqlx::query_as::<_, RelayTarget>("SELECT * FROM relay_targets WHERE id = ?")
-        .bind(id)
-        .fetch_one(pool)
-        .await
-}
