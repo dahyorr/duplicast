@@ -86,7 +86,7 @@ pub async fn add_relay_target(
 }
 
 pub async fn get_relay_targets(pool: &SqlitePool) -> Result<Vec<RelayTarget>, sqlx::Error> {
-    sqlx::query_as("SELECT * FROM relay_targets")
+    sqlx::query_as("SELECT * FROM relay_targets ORDER BY enabled DESC")
         .fetch_all(pool)
         .await
 }
@@ -110,4 +110,11 @@ pub async fn remove_relay_target(id: i64, pool: &SqlitePool) -> Result<(), sqlx:
         .execute(pool)
         .await?;
     Ok(())
+}
+
+pub async fn get_relay_target(id: i64, pool: &SqlitePool) -> Result<RelayTarget, sqlx::Error> {
+    sqlx::query_as::<_, RelayTarget>("SELECT * FROM relay_targets WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await
 }

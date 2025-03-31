@@ -6,6 +6,9 @@ pub enum AppEvents {
     // ServersReady,
     StreamEnded,
     StreamPreviewEnded,
+    RelayActive, 
+    RelayEnded,
+    RelayFailed,
 }
 
 impl AppEvents {
@@ -17,6 +20,9 @@ impl AppEvents {
             AppEvents::StreamPreviewEnded => "stream-preview-ended",
             AppEvents::StreamEnded => "stream-ended",
             AppEvents::StreamPreviewFailed => "stream-preview-failed",
+            AppEvents::RelayActive => "relay-active",
+            AppEvents::RelayEnded => "relay-ended",
+            AppEvents::RelayFailed => "relay-failed",
         }
     }
 }

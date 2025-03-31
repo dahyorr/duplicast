@@ -42,7 +42,7 @@ pub struct AppState {
 #[derive(Debug)]
 pub struct RelayHandle {
     pub id: i64,
-    pub process: Child,
+    pub process: Arc<Mutex<Child>>,
     pub rx_task: JoinHandle<()>,
 }
 

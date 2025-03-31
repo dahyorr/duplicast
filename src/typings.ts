@@ -5,6 +5,9 @@ export enum AppStateEvents {
   StreamPreviewEnded = "stream-preview-ended",
   StreamPreviewFailed = "stream-preview-failed",
   StreamEnded = "stream-ended",
+  RelayActive = "relay-active",
+  RelayEnded = "relay-ended",
+  RelayFailed = "relay-failed",
 }
 
 export interface RelayTarget {
@@ -14,4 +17,7 @@ export interface RelayTarget {
   created_at: string;
   url: string;
   enabled: boolean;
+  active?: boolean;
+  failed?: boolean;
+  errorMessage?: string;
 }

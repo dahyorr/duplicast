@@ -6,7 +6,7 @@ mod rtmp;
 use db::RelayTargetPublic;
 use rtmp::relay;
 use std::sync::Arc;
-use tauri::{async_runtime, Manager};
+use tauri::{async_runtime, AppHandle, Manager};
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn check_if_ready(state: tauri::State<'_, Arc<config::AppState>>) -> bool {
@@ -28,33 +28,32 @@ async fn get_ports(
 }
 
 #[tauri::command]
-async fn start_all_relays(state: tauri::State<'_, Arc<config::AppState>>) -> Result<(), String> {
-    let _ = relay::start_relays(state.inner()).await;
+async fn start_all_relays(app: AppHandle) -> Result<(), String> {
+    let _ = relay::start_relays(&app).await;
     Ok(())
 }
 
 #[tauri::command]
-async fn stop_all_relays(state: tauri::State<'_, Arc<config::AppState>>) -> Result<(), String> {
-    let _ = relay::stop_relays(state.inner()).await;
+async fn stop_all_relays(app: AppHandle) -> Result<(), String> {
+    let _ = relay::stop_relays(&app).await;
     Ok(())
 }
 
-// #[tauri::command]
-// async fn start_relay(app: AppHandle, url: String, stream_key: String) -> Result<(), String> {
-//     let _ = rtmp::start_relay(&app, url, stream_key.clone()).await?;
-//     Ok(())
-// }
+#[tauri::command]
+async fn start_relay(app: AppHandle, id: i64) -> Result<(), String> {
+    let pool = db::get_db_pool();
+    let relay = db::get_relay_target(id, &pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = relay::start_relay(&app, &relay).await;
+    Ok(())
+}
 
-// async fn stop_relay(state: tauri::State<'_, Arc<config::AppState>>, id: i64) -> Result<(), String> {
-//     let mut relays = state.relays.lock().unwrap();
-
-//     if let Some(mut child) = relays.remove(&id) {
-//         let _ = child.kill().await;
-//         println!("🛑 Stopped relay with id {id}");
-//     }
-
-//     Ok(())
-// }
+#[tauri::command]
+async fn stop_relay(app: AppHandle, id: i64) -> Result<(), String> {
+    let _ = relay::stop_relay(&app, id).await;
+    Ok(())
+}
 
 #[tauri::command]
 async fn add_relay_target(stream_key: &str, url: &str, tag: &str) -> Result<(), String> {
@@ -109,6 +108,8 @@ pub fn run() {
             remove_relay_target,
             start_all_relays,
             stop_all_relays,
+            stop_relay,
+            start_relay
         ])
         .setup(|app| {
             let app_handle = app.handle();

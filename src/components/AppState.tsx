@@ -9,23 +9,25 @@ interface AppState {
   serversReady: boolean;
   sourceActive: boolean;
   ports: { rtmp_port: number, file_port: number }
-  relayTargets: RelayTarget[];
+  relayTargets: Record<string, RelayTarget>;
   getRelayTargets: () => Promise<void>;
+  resetRelayFailedState: (target: RelayTarget) => void;
 }
 
 const AppContext = createContext<AppState>({
   serversReady: false,
   sourceActive: false,
   ports: { rtmp_port: 0, file_port: 0 },
-  relayTargets: [],
-  getRelayTargets: async () => { }
+  relayTargets: {},
+  getRelayTargets: async () => { },
+  resetRelayFailedState: () => { },
 });
 
 const AppStateProvider = ({ children }: PropsWithChildren) => {
   const [ports, setPorts] = useState({ rtmp_port: 0, file_port: 0 });
   const [serversReady, setServersReady] = useState(false);
   const [sourceActive, setSourceActive] = useState(false);
-  const [relayTargets, setRelayTargets] = useState<RelayTarget[]>([]);
+  const [relayTargets, setRelayTargets] = useState<Record<string, RelayTarget>>({});
 
   async function get_ports() {
     setPorts(await invoke("get_ports"));
@@ -43,8 +45,12 @@ const AppStateProvider = ({ children }: PropsWithChildren) => {
   }
 
   async function getRelayTargets() {
-    const targets = await invoke("get_relay_targets");
-    setRelayTargets(targets as any);
+    const targets = await invoke("get_relay_targets") as RelayTarget[];
+    const targetMap = targets.reduce((acc, target) => {
+      acc[target.id] = target;
+      return acc;
+    }, {} as Record<string, RelayTarget>);
+    setRelayTargets(targetMap);
   }
 
   const init = async () => {
@@ -79,11 +85,55 @@ const AppStateProvider = ({ children }: PropsWithChildren) => {
       setSourceActive(false)
     })
     return () => {
-
       unlistenStreamPreviewActive.then((u) => u());
       unlistenStreamEnded.then((u) => u());
     }
   }, [])
+
+  useEffect(() => {
+    // relay activity listeners
+    if (Object.values(relayTargets).length < 1) return;
+    const unlistenRelayActive = listen(AppStateEvents.RelayActive, ({ payload: id }) => {
+      console.log('Relay started:', id)
+      setRelayTargets(prev => {
+        const target = prev[parseInt(id as string)];
+        if (target) {
+          return { ...prev, [target.id]: { ...target, active: true } }
+        }
+        return prev;
+
+      })
+    })
+
+    const unlistenRelayEnded = listen(AppStateEvents.RelayEnded, ({ payload: id }) => {
+      console.log('Relay ended:', id)
+      setRelayTargets(prev => {
+        const target = prev[parseInt(id as string)];
+        if (target) {
+          return { ...prev, [target.id]: { ...target, active: false } }
+        }
+        return prev;
+      })
+    })
+
+    const unlistenRelayFailed = listen(AppStateEvents.RelayFailed, ({ payload }) => {
+      const [id, errorMessage] = payload as [string, string]
+      console.log('Relay failed:', id)
+      setRelayTargets(prev => {
+        const target = prev[parseInt(id)];
+        if (target) {
+          return { ...prev, [target.id]: { ...target, failed: true, active: false, errorMessage } }
+        }
+        return prev;
+      })
+    })
+
+    return () => {
+      unlistenRelayActive.then((u) => u());
+      unlistenRelayEnded.then((u) => u());
+      unlistenRelayFailed.then((u) => u());
+    }
+  }, [relayTargets])
 
 
   useEffect(() => {
@@ -96,13 +146,21 @@ const AppStateProvider = ({ children }: PropsWithChildren) => {
     return () => clearInterval(interval);
   }, [serversReady]);
 
+  const resetRelayFailedState = (target: RelayTarget) => {
+    const updatedTarget = { ...target, failed: false, errorMessage: undefined }
+    setRelayTargets(prev => {
+      return { ...prev, [target.id]: updatedTarget }
+    })
+  }
+
 
   const value = {
     serversReady,
     sourceActive,
     ports,
     relayTargets,
-    getRelayTargets
+    getRelayTargets,
+    resetRelayFailedState
   } as AppState;
 
   return (

@@ -10,13 +10,13 @@ interface Props { }
 const RelayTargets = ({ }: Props) => {
   const { relayTargets, getRelayTargets } = useAppState()
 
-  const onToggleActive = async (target: RelayTarget) => {
-    const isActive = target.enabled
+  const onToggleEnabled = async (target: RelayTarget) => {
+    const isEnabled = target.enabled
     try {
-      await invoke("toggle_relay_target", { id: target.id, active: !isActive })
+      await invoke("toggle_relay_target", { id: target.id, active: !isEnabled })
       addToast({
-        title: `Relay Target ${!isActive ? "Activated" : "Deactivated"}`,
-        description: `Relay target ${target.tag} has been ${!isActive ? "activated" : "deactivated"}`,
+        title: `Relay Target ${!isEnabled ? "Activated" : "Deactivated"}`,
+        description: `Relay target ${target.tag} has been ${!isEnabled ? "activated" : "deactivated"}`,
         color: "success"
       })
     }
@@ -70,27 +70,68 @@ const RelayTargets = ({ }: Props) => {
     }
   }
 
-  // const stopAllRelayTargets = async () => {
-  //   try {
-  //     await invoke("stop_all_relays")
-  //     addToast({
-  //       title: "Relay Targets Stopped",
-  //       description: "All relay targets stopped successfully",
-  //       color: "success"
-  //     })
-  //   }
-  //   catch (err) {
-  //     console.error(err)
-  //     addToast({
-  //       title: "Error stopping relay targets",
-  //       description: (err as any)?.message,
-  //       color: "danger"
-  //     })
-  //   }
-  // }
+  const stopAllRelayTargets = async () => {
+    try {
+      await invoke("stop_all_relays")
+      addToast({
+        title: "Relay Targets Stopped",
+        description: "All relay targets stopped successfully",
+        color: "success"
+      })
+    }
+    catch (err) {
+      console.error(err)
+      addToast({
+        title: "Error stopping relay targets",
+        description: (err as any)?.message,
+        color: "danger"
+      })
+    }
+  }
+
+  const onStartRelay = async (target: RelayTarget) => {
+    try {
+      await invoke("start_relay", { id: target.id })
+      addToast({
+        title: "Relay Target Started",
+        description: "Relay target started successfully",
+        color: "success"
+      })
+    }
+    catch (err) {
+      console.error(err)
+      addToast({
+        title: "Error starting relay target",
+        description: (err as any)?.message,
+        color: "danger"
+      })
+    }
+  }
+
+  const onStopRelay = async (target: RelayTarget) => {
+    try {
+      await invoke("stop_relay", { id: target.id })
+      addToast({
+        title: "Relay Target Stopped",
+        description: "Relay target stopped successfully",
+        color: "success"
+      })
+    }
+    catch (err) {
+      console.error(err)
+      addToast({
+        title: "Error stopping relay target",
+        description: (err as any)?.message,
+        color: "danger"
+      })
+    }
+  }
+
+
+  const relays = Object.values(relayTargets)
 
   return (
-    <div className=" flex flex-col gap-8">
+    <div className=" flex flex-col gap-4">
       <div className="flex justify-between items-center">
         <p>Relay Targets</p>
         <div className="flex gap-2">
@@ -103,16 +144,33 @@ const RelayTargets = ({ }: Props) => {
           >
             Start All
           </Button>
+          <Button
+            variant="flat"
+            color="danger"
+            onPress={stopAllRelayTargets}
+            className="flex items-center gap-2"
+          >
+            Stop All
+          </Button>
         </div>
       </div>
 
-      {relayTargets.length < 1 && (<div className="flex flex-col gap-2">
+      {relays.length < 1 && (<div className="flex flex-col gap-2">
         <p className="text-muted-foreground text-center">No relay targets yet</p>
         <p className="text-muted-foreground text-center">Click the button above to create one</p>
       </div>)}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {relayTargets.map((target) => <RelayTargetItem key={target.id} target={target} onToggleActive={onToggleActive} onDelete={onDelete} />)}
+        {relays.map((target) => (
+          <RelayTargetItem
+            key={target.id}
+            target={target}
+            onToggleEnabled={onToggleEnabled}
+            onDelete={onDelete}
+            onStartRelay={onStartRelay}
+            onStopRelay={onStopRelay}
+          />
+        ))}
       </div>
 
 

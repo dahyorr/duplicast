@@ -201,7 +201,7 @@ async fn handle_session_event(
                 app_name, stream_key
             );
             println!("🛑 Stream ended. Closing ffmpeg.");
-            relay::stop_relays(&app.state::<Arc<config::AppState>>()).await;
+            relay::stop_relays(&app).await;
             encoder::stop_encoder(&app).await;
             app.emit(AppEvents::StreamEnded.as_str(), stream_key)?;
             // Optionally: clean up any associated buffers, files, etc.
