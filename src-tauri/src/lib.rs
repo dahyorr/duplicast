@@ -5,8 +5,9 @@ mod file_server;
 mod rtmp;
 use db::RelayTargetPublic;
 use rtmp::relay;
+use rtmp::stop_encoder;
 use std::sync::Arc;
-use tauri::{async_runtime, AppHandle, Manager};
+use tauri::{async_runtime, AppHandle, Listener, Manager};
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn check_if_ready(state: tauri::State<'_, Arc<config::AppState>>) -> bool {
@@ -91,6 +92,26 @@ async fn remove_relay_target(id: i64) -> Result<(), String> {
     db::remove_relay_target(id, &pool)
         .await
         .map_err(|e| e.to_string())
+}
+
+async fn cleanup_all(app: &AppHandle) {
+    // Stop all relays
+    let _ = stop_all_relays(app.clone()).await;
+    // Stop encoder if active
+    stop_encoder(app).await;
+    // delete hls_files
+    config::hls_output_dir()
+        .read_dir()
+        .expect("Failed to read directory")
+        .filter_map(|entry| entry.ok())
+        .for_each(|entry| {
+            let path = entry.path();
+            if path.is_file() {
+                std::fs::remove_file(path).expect("Failed to delete file");
+            }
+        });
+
+    println!("✅ Cleanup complete. Safe to exit.");
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

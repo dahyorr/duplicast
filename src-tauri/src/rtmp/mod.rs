@@ -1,7 +1,8 @@
-mod handshake;
-pub mod session;
 mod encoder;
+mod handshake;
 pub mod relay;
+pub mod session;
 mod utils;
 
+pub use encoder::stop_encoder;
 pub use handshake::init_rtmp_server;
