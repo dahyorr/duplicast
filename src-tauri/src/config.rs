@@ -13,7 +13,7 @@ use sqlx::{prelude::FromRow, SqlitePool};
 use tokio::{
     net::TcpListener,
     process::{Child, ChildStdin},
-    sync::{broadcast, Mutex},
+    sync::{mpsc, Mutex},
     task::JoinHandle,
 };
 
@@ -32,9 +32,9 @@ pub struct AppState {
     pub source_metadata: Mutex<Option<StreamMetadata>>,
     pub ports: Arc<Mutex<PortInfo>>,
     pub relays: Mutex<HashMap<i64, RelayHandle>>,
+    pub relay_channels: Mutex<HashMap<i64, mpsc::Sender<Arc<Vec<u8>>>>>,
     pub encoder_process: Mutex<Option<Child>>,
     pub encoder_stdin: Mutex<Option<ChildStdin>>,
-    pub encoder_tx: broadcast::Sender<Vec<u8>>,
     pub encoder_sequence_headers: Mutex<Vec<Vec<u8>>>,
     // pub metadata:
 }
@@ -44,11 +44,11 @@ pub struct RelayHandle {
     pub id: i64,
     pub process: Arc<Mutex<Child>>,
     pub rx_task: JoinHandle<()>,
+    // pub tx: mpsc::Sender<Arc<Vec<u8>>>,
 }
 
 impl AppState {
     pub fn new(rtmp_port: u16, file_port: u16) -> Self {
-        let (encoder_tx, _) = broadcast::channel(512);
         Self {
             rtmp_ready: Arc::new(AtomicBool::new(false)),
             source_active: Arc::new(AtomicBool::new(false)),
@@ -61,7 +61,7 @@ impl AppState {
             relays: Mutex::new(HashMap::new()),
             encoder_process: Mutex::new(None),
             encoder_stdin: Mutex::new(None),
-            encoder_tx,
+            relay_channels: Mutex::new(HashMap::new()),
             source_metadata: Mutex::new(None),
             encoder_sequence_headers: Mutex::new(vec![]),
         }
@@ -69,6 +69,20 @@ impl AppState {
 
     pub fn is_ready(&self) -> bool {
         self.rtmp_ready.load(Ordering::SeqCst) && self.file_ready.load(Ordering::SeqCst)
+    }
+
+    pub async fn register_relay_channel(
+        &self,
+        id: i64,
+        tx: mpsc::Sender<Arc<Vec<u8>>>,
+    ) {
+        let mut relay_channels = self.relay_channels.lock().await;
+        relay_channels.insert(id, tx);
+    }
+
+    pub async fn unregister_relay_channel(&self, id: i64) {
+        let mut relay_channels = self.relay_channels.lock().await;
+        relay_channels.remove(&id);
     }
 }
 

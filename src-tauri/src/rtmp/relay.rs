@@ -7,7 +7,11 @@ use crate::{
 };
 use std::{process::Stdio, sync::Arc};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::{io::AsyncWriteExt, process::Command, sync::Mutex};
+use tokio::{
+    io::AsyncWriteExt,
+    process::Command,
+    sync::{mpsc, Mutex},
+};
 
 pub async fn start_relay(app: &AppHandle, relay: &db::RelayTarget) {
     let state = app.state::<Arc<config::AppState>>();
@@ -36,6 +40,7 @@ pub async fn stop_relay(app: &AppHandle, id: i64) {
     let mut relays = state.relays.lock().await;
     if let Some(handle) = relays.remove(&id) {
         handle.rx_task.abort();
+        state.unregister_relay_channel(id).await;
         let _ = handle.process.lock().await.kill().await;
         app.emit(AppEvents::RelayEnded.as_str(), id)
             .unwrap_or_else(|_| {
@@ -95,24 +100,23 @@ async fn spawn_relay(
     let mut stdin = child.stdin.take().unwrap();
     let shared_child = Arc::new(Mutex::new(child));
     let state = app.state::<Arc<config::AppState>>();
-    let encoder_tx = state.encoder_tx.clone();
-    let mut rx = encoder_tx.subscribe();
-
     let headers = state.encoder_sequence_headers.lock().await.clone();
     stdin.write_all(&flv_header()).await?;
     for tag in headers {
         stdin.write_all(&tag).await?;
     }
-    // Task to write data to relay stdin
+
+    let (tx, mut rx) = mpsc::channel(4096);
+    // let tx_clone = tx.clone();
+    state.register_relay_channel(id, tx).await;
     let task = tokio::spawn(async move {
-        while let Ok(chunk) = rx.recv().await {
-            if let Err(e) = stdin.write_all(&chunk).await {
+        while let Some(data) = rx.recv().await {
+            if let Err(e) = stdin.write_all(&data).await {
                 eprintln!("⚠️ Relay write failed: {}", e);
                 break;
             }
         }
     });
-
     // Task to monitor child process
     let app_clone = app.clone();
     let id_clone = id;
@@ -145,5 +149,6 @@ async fn spawn_relay(
         id,
         process: shared_child,
         rx_task: task,
+        // tx,
     })
 }
