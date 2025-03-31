@@ -15,23 +15,19 @@ const MainPage = ({ }: Props) => {
     return <Loading />
   }
   return (
-    <div className="container mx-auto">
-      <Navbar />
-
-      <div className="flex flex-col gap-4">
-        <div className="mt-16">
-          <div className="flex gap-2 min-h-[300px]">
-            <StreamInputDetails />
-            <Divider orientation="vertical" />
-            <StreamPreview />
-          </div>
+    <div className="flex flex-col gap-4">
+      <div className="mt-16">
+        <div className="flex gap-2 min-h-[300px]">
+          <StreamInputDetails />
+          <Divider orientation="vertical" />
+          <StreamPreview />
         </div>
+      </div>
 
-        <Divider />
+      <Divider />
 
-        <div>
-          <StreamDestinations />
-        </div>
+      <div>
+        <StreamDestinations />
       </div>
     </div>
   )

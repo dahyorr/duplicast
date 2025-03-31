@@ -1,6 +1,7 @@
 import { Button } from "@heroui/button"
 import { Link } from "@heroui/link"
 import { NavbarContent, Navbar as HeroNavbar, NavbarBrand, NavbarItem } from "@heroui/navbar"
+import { open } from "@tauri-apps/plugin-shell"
 
 const Navbar = () => {
   return (
@@ -11,7 +12,7 @@ const Navbar = () => {
 
       <NavbarContent justify="end">
         <NavbarItem>
-          <Button as={Link} color="primary" href="#" variant="flat">
+          <Button color="primary" variant="flat" onPress={() => open("https://github.com/dahyorr/duplicast")}>
             Github
           </Button>
         </NavbarItem>
