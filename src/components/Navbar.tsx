@@ -1,7 +1,7 @@
 import { Button } from "@heroui/button"
 import { NavbarContent, Navbar as HeroNavbar, NavbarBrand, NavbarItem } from "@heroui/navbar"
 import { open } from "@tauri-apps/plugin-shell"
-
+import SettingsModal from "./SettingsModal"
 import { FaGithub } from "react-icons/fa6"
 
 const Navbar = () => {
@@ -12,6 +12,9 @@ const Navbar = () => {
       </NavbarBrand>
 
       <NavbarContent justify="end">
+        <NavbarItem>
+          <SettingsModal />
+        </NavbarItem>
         <NavbarItem>
           <Button
             color="primary"
