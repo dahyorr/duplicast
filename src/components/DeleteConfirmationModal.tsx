@@ -25,7 +25,6 @@ const DeleteConfirmationModal: React.FC<DeleteConfirmationModalProps> = ({
   children
 }) => {
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
-  console.log(isOpen)
   const [deleting, setDeleting] = useState(false);
 
   const handleConfirm = async (onClose: () => void) => {

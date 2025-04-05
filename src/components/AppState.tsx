@@ -9,6 +9,7 @@ interface AppState {
   serversReady: boolean;
   sourceActive: boolean;
   ports: { rtmp_port: number, file_port: number }
+  ips: string[],
   relayTargets: Record<string, RelayTarget>;
   getRelayTargets: () => Promise<void>;
   resetRelayFailedState: (target: RelayTarget) => void;
@@ -18,6 +19,7 @@ const AppContext = createContext<AppState>({
   serversReady: false,
   sourceActive: false,
   ports: { rtmp_port: 0, file_port: 0 },
+  ips: [],
   relayTargets: {},
   getRelayTargets: async () => { },
   resetRelayFailedState: () => { },
@@ -25,18 +27,21 @@ const AppContext = createContext<AppState>({
 
 const AppStateProvider = ({ children }: PropsWithChildren) => {
   const [ports, setPorts] = useState({ rtmp_port: 0, file_port: 0 });
+  const [ips, setIps] = useState<string[]>([]);
   const [serversReady, setServersReady] = useState(false);
   const [sourceActive, setSourceActive] = useState(false);
   const [relayTargets, setRelayTargets] = useState<Record<string, RelayTarget>>({});
 
-  async function get_ports() {
-    setPorts(await invoke("get_ports"));
+  async function get_startup_data() {
+    const { ports, ips } = await invoke("get_startup_data") as { ports: { rtmp_port: number, file_port: number }, ips: string[] };
+    setPorts(ports);
+    setIps(ips);
   }
 
   async function check_if_ready() {
     const ready = await invoke("check_if_ready");
     if (ready) {
-      await get_ports();
+      await get_startup_data();
       setServersReady(true);
       console.log("RTMP + File Server Ready ✅");
       const sourceActive = await invoke("check_if_stream_active") as boolean;
@@ -153,11 +158,11 @@ const AppStateProvider = ({ children }: PropsWithChildren) => {
     })
   }
 
-
   const value = {
     serversReady,
     sourceActive,
     ports,
+    ips,
     relayTargets,
     getRelayTargets,
     resetRelayFailedState

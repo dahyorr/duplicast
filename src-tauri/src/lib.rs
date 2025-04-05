@@ -3,6 +3,7 @@ mod db;
 mod events;
 mod file_server;
 mod rtmp;
+use config::StartUpData;
 use db::RelayTargetPublic;
 use rtmp::relay;
 // use rtmp::stop_encoder;
@@ -22,10 +23,14 @@ fn check_if_stream_active(state: tauri::State<'_, Arc<config::AppState>>) -> boo
 }
 
 #[tauri::command]
-async fn get_ports(
+async fn get_startup_data(
     state: tauri::State<'_, Arc<config::AppState>>,
-) -> Result<config::PortInfo, String> {
-    Ok(state.ports.lock().await.clone())
+) -> Result<config::StartUpData, String> {
+    let ports = state.ports.lock().await.clone();
+    Ok(StartUpData {
+        ports,
+        ips: config::get_ip_addresses().await,
+    })
 }
 
 #[tauri::command]
@@ -121,7 +126,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             check_if_ready,
-            get_ports,
+            get_startup_data,
             check_if_stream_active,
             add_relay_target,
             get_relay_targets,

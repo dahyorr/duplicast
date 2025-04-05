@@ -7,6 +7,7 @@ use std::{
     },
 };
 
+use get_if_addrs::get_if_addrs;
 use rml_rtmp::sessions::StreamMetadata;
 use serde::Serialize;
 use sqlx::{prelude::FromRow, SqlitePool};
@@ -22,6 +23,12 @@ use tokio::{
 pub struct PortInfo {
     pub rtmp_port: u16,
     pub file_port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct StartUpData{
+    pub ports: PortInfo,
+    pub ips: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -90,6 +97,22 @@ async fn find_available_port(start_port: u16) -> Result<u16, Box<dyn std::error:
         }
     }
     panic!("⚠️ No available ports found");
+}
+
+pub async fn get_ip_addresses() -> Vec<String> {
+    let mut ips = vec![];
+    let max_ips = 3;
+    // get max of 3 ipv4 addresses
+    let interfaces = get_if_addrs().unwrap();
+    for iface in interfaces {
+        if iface.ip().is_ipv4() {
+            ips.push(iface.ip().to_string());
+            if ips.len() >= max_ips {
+                break;
+            }
+        }
+    }
+    ips
 }
 
 pub async fn get_or_init_ports(pool: &SqlitePool) -> Result<PortInfo, Box<dyn std::error::Error>> {
