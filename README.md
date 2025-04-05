@@ -16,10 +16,13 @@ Duplicast is a tool for relaying live streams to multiple destinations. It recei
 ```bash
 cargo install tauri-cli
 npm install
+```
 
 	2.	Run in dev mode:
 
+```bash
 npm run tauri dev
+```
 
 	3.	In OBS or similar:
 	•	Stream to: rtmp://localhost:1580/live
