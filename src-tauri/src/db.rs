@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{migrate::Migrator, sqlite::SqlitePoolOptions, FromRow, SqlitePool};
-use std::{fs, path::Path, sync::OnceLock};
+use std::sync::OnceLock;
+use tauri::AppHandle;
 
 use crate::config;
 
@@ -8,13 +9,13 @@ static DB_POOL: OnceLock<SqlitePool> = OnceLock::new();
 // Path to migrations folder (relative to project root)
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
-pub async fn init_db() -> Result<(), Box<dyn std::error::Error>> {
-    let db_path = "./data/app.db";
+pub async fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = config::get_data_dir(app).join("app.sqlite");
 
-    if let Some(parent) = Path::new(db_path).parent() {
-        fs::create_dir_all(parent).expect("❌ Failed to create DB directory");
-    }
-    let db_url = format!("sqlite://{}", db_path);
+    // if let Some(parent) = Path::new(db_path.as_os_str()).parent() {
+    //     fs::create_dir_all(parent).expect("❌ Failed to create DB directory");
+    // }
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
     println!("📦 Creating DB file...");
     let pool = SqlitePoolOptions::new()
         .max_connections(5)

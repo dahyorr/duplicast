@@ -12,6 +12,7 @@ import { Select, SelectItem } from "@heroui/select";
 import { addToast } from "@heroui/toast";
 import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
+import useAppState from "../hooks/useAppState";
 
 const targetTags = [
   { key: "youtube", label: "YouTube" },
@@ -27,6 +28,7 @@ const NewRelayTargetModal = () => {
   const [key, setKey] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const { isOpen, onOpen, onOpenChange, onClose } = useDisclosure()
+  const {getRelayTargets} = useAppState();
 
   const handleSubmit = async (e: any) => {
     e.preventDefault();
@@ -37,6 +39,7 @@ const NewRelayTargetModal = () => {
         url: url,
         tag
       })
+      await getRelayTargets();
       addToast({
         title: "Relay Target Created",
         description: "Relay target created successfully",

@@ -10,6 +10,7 @@ use std::{
 use rml_rtmp::sessions::StreamMetadata;
 use serde::Serialize;
 use sqlx::{prelude::FromRow, SqlitePool};
+use tauri::{AppHandle, Manager};
 use tokio::{
     net::TcpListener,
     process::{Child, ChildStdin},
@@ -71,11 +72,7 @@ impl AppState {
         self.rtmp_ready.load(Ordering::SeqCst) && self.file_ready.load(Ordering::SeqCst)
     }
 
-    pub async fn register_relay_channel(
-        &self,
-        id: i64,
-        tx: mpsc::Sender<Arc<Vec<u8>>>,
-    ) {
+    pub async fn register_relay_channel(&self, id: i64, tx: mpsc::Sender<Arc<Vec<u8>>>) {
         let mut relay_channels = self.relay_channels.lock().await;
         relay_channels.insert(id, tx);
     }
@@ -122,14 +119,22 @@ pub async fn get_or_init_ports(pool: &SqlitePool) -> Result<PortInfo, Box<dyn st
 }
 
 // store preview output path
-pub fn hls_output_dir() -> PathBuf {
-    PathBuf::from("./hls_output")
+
+pub fn get_data_dir(app: &AppHandle) -> PathBuf {
+    let data_dir = app
+        .path()
+        .app_local_data_dir()
+        .unwrap_or_else(|_| std::env::current_dir().unwrap());
+    data_dir
 }
-pub fn log_output_dir() -> PathBuf {
-    PathBuf::from("./logs")
+pub fn hls_output_dir(app: &AppHandle) -> PathBuf {
+    get_data_dir(app).join("./hls_output")
 }
-pub fn hls_playlist_path() -> PathBuf {
-    hls_output_dir().join("playlist.m3u8")
+pub fn log_output_dir(app: &AppHandle) -> PathBuf {
+    get_data_dir(app).join("./logs")
+}
+pub fn hls_playlist_path(app: &AppHandle) -> PathBuf {
+    hls_output_dir(app).join("playlist.m3u8")
 }
 
 pub fn mask_key(key: &str) -> String {

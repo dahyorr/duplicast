@@ -1,11 +1,14 @@
 import { Card, CardBody } from "@heroui/card"
 import { RelayTarget } from "../../typings"
 import { Button } from "@heroui/button"
-import { Trash2, Power, X, Play, Square, AlertTriangle } from "lucide-react"
-
 import { Tooltip } from "@heroui/tooltip"
 import { Chip } from "@heroui/chip"
 import DeleteConfirmationModal from "../DeleteConfirmationModal"
+import { FaRegTrashAlt } from "react-icons/fa"
+import { FaPowerOff } from "react-icons/fa6"
+import { IoPlayOutline, IoStopSharp } from "react-icons/io5"
+import { GoAlertFill } from "react-icons/go"
+import { IoMdClose } from "react-icons/io"
 
 interface Props {
   target: RelayTarget
@@ -37,7 +40,7 @@ const RelayTargetItem = ({
               <Chip
                 variant="faded"
                 color="danger"
-                startContent={<AlertTriangle className="h-3 w-3" />}
+                startContent={<GoAlertFill className="h-3 w-3" />}
               >
                 Failed
               </Chip>
@@ -46,7 +49,7 @@ const RelayTargetItem = ({
               <Chip
                 variant="faded"
                 color="success"
-                startContent={<Play className="h-3 w-3" />}
+                startContent={<IoPlayOutline className="h-3 w-3" />}
               >
                 Streaming
               </Chip>
@@ -54,7 +57,7 @@ const RelayTargetItem = ({
             {isEnabled && !isRelayRunning && !isRelayFailed && (<Chip
               variant="faded"
               color={"secondary"}
-              startContent={<X />}
+              startContent={<IoMdClose />}
             >
               {"Inactive"}
             </Chip>)}
@@ -83,25 +86,29 @@ const RelayTargetItem = ({
                 color="success"
                 onPress={() => onStartRelay(target)}
                 aria-label="Start Relay"
+                isIconOnly
               >
-                <Play className="h-4 w-4" />
+                <IoPlayOutline className="h-4 w-4" />
               </Button>
             </Tooltip>
           )}
 
-          {(isRelayRunning || isRelayFailed) && (
-            <Tooltip content="Stop Relay">
-              <Button
-                variant="flat"
-                size="sm"
-                color="danger"
-                onPress={() => onStopRelay(target)}
-                aria-label="Stop Relay"
-              >
-                <Square className="h-4 w-4" />
-              </Button>
-            </Tooltip>
-          )}
+          {
+            (isRelayRunning || isRelayFailed) &&
+            (
+              <Tooltip content="Stop Relay">
+                <Button
+                  variant="flat"
+                  size="sm"
+                  color="danger"
+                  onPress={() => onStopRelay(target)}
+                  aria-label="Stop Relay"
+                  isIconOnly
+                >
+                  <IoStopSharp className="h-4 w-4" />
+                </Button>
+              </Tooltip>
+            )}
 
           <Tooltip content={isEnabled ? "Disable Target" : "Enable Target"}>
             <Button
@@ -110,8 +117,9 @@ const RelayTargetItem = ({
               color={isEnabled ? "success" : "default"}
               onPress={() => onToggleEnabled?.(target)}
               aria-label={isEnabled ? "Disable Target" : "Enable Target"}
+              isIconOnly
             >
-              <Power className={`h-4 w-4`} />
+              <FaPowerOff className={`h-4 w-4`} />
             </Button>
           </Tooltip>
 
@@ -122,9 +130,10 @@ const RelayTargetItem = ({
                 size="sm"
                 className="text-destructive hover:bg-destructive/10"
                 title="Delete"
+                isIconOnly
                 onPress={onOpen}
               >
-                <Trash2 className="h-4 w-4" />
+                <FaRegTrashAlt className="h-4 w-4" />
               </Button>}
             </DeleteConfirmationModal>
           </Tooltip>

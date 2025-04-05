@@ -116,7 +116,7 @@ async fn handle_session_event(
                     // wait for playlist to be created in new thread
                     let app_clone = app.clone();
                     async_runtime::spawn(async move {
-                        let playlist_path = config::hls_playlist_path();
+                        let playlist_path = config::hls_playlist_path(&app_clone);
                         use tokio::time::{sleep, Duration};
                         let mut attempts = 0;
                         while !playlist_path.exists() && attempts < 50 {

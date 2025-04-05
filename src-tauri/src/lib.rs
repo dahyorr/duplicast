@@ -135,15 +135,25 @@ pub fn run() {
         .setup(|app| {
             let app_handle = app.handle();
             let app_state = Arc::new(config::AppState::new(0, 0));
-            let log_dir = config::log_output_dir();
             // Create the log directory if it doesn't exist
+            // let data_dir = app
+            //     .path_resolver()
+            //     .app_data_dir()
+            //     .unwrap_or_else(|| std::env::current_dir().unwrap());
+
+            app.manage(app_state);
+            let log_dir = config::log_output_dir(&app_handle);
             if !log_dir.exists() {
                 std::fs::create_dir_all(&log_dir).expect("Failed to create log directory");
             }
-            app.manage(app_state);
+            //clear hls_output_dir on start
+            let hls_dir = config::hls_output_dir(&app_handle);
+            if hls_dir.exists() {
+                std::fs::remove_dir_all(&hls_dir).expect("Failed to remove hls_output_dir");
+            }
             let app = app_handle.clone();
             async_runtime::spawn(async move {
-                let _ = db::init_db().await.expect("❌ Failed to init DB");
+                let _ = db::init_db(&app).await.expect("❌ Failed to init DB");
                 println!("✅ Database ready");
 
                 let db_pool = db::get_db_pool();

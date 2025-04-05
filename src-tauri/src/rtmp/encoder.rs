@@ -11,12 +11,12 @@ pub async fn start_encoder(
     // initial_data: Vec<u8>,
     app: &AppHandle,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let log_dir = config::log_output_dir();
+    let log_dir = config::log_output_dir(app);
     let log_file = std::fs::File::create(&log_dir.join("ffmpeg_encoder.log"))?;
     let log_file = Stdio::from(log_file);
 
-    let out_dir = config::hls_output_dir();
-    let out_path = config::hls_playlist_path();
+    let out_dir = config::hls_output_dir(app);
+    let out_path = config::hls_playlist_path(app);
     fs::create_dir_all(out_dir)?;
     let output = format!(
         "[f=hls:hls_time=6:hls_list_size=8:hls_flags=delete_segments]{}|[f=flv]pipe:1",
@@ -101,7 +101,7 @@ pub async fn stop_encoder(app: &AppHandle) {
         .unwrap_or_else(|_| {
             eprintln!("⚠️ Failed to emit stream preview stopped event");
         });
-    let out_dir = config::hls_output_dir();
+    let out_dir = config::hls_output_dir(&app);
     if out_dir.exists() {
         fs::remove_dir_all(out_dir).unwrap_or_else(|_| {
             eprintln!("⚠️ Failed to remove preview output directory");

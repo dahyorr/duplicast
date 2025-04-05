@@ -5,7 +5,14 @@ use crate::{
     db::{self},
     events::AppEvents,
 };
-use std::{process::Stdio, sync::Arc};
+use std::{
+    process::Stdio,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::{
     io::AsyncWriteExt,
@@ -21,7 +28,7 @@ pub async fn start_relay(app: &AppHandle, relay: &db::RelayTarget) {
         eprintln!("⚠️ Relay id:{} already exists", relay.id);
         return;
     }
-    match spawn_relay(app, relay.id, &relay.url, &relay.stream_key).await {
+    match spawn_relay(app, relay).await {
         Ok(handle) => {
             relays.insert(relay.id, handle);
 
@@ -70,11 +77,10 @@ pub async fn stop_relays(app: &AppHandle) {
 
 async fn spawn_relay(
     app: &AppHandle,
-    id: i64,
-    target_url: &str,
-    stream_key: &str,
+    relay: &db::RelayTarget,
 ) -> Result<RelayHandle, Box<dyn std::error::Error>> {
-    let log_dir = config::log_output_dir();
+    let id = relay.id;
+    let log_dir = config::log_output_dir(app);
     let log_file = std::fs::File::create(log_dir.join(format!("relay_{id}.log")))?;
     let log_file = Stdio::from(log_file);
 
@@ -90,7 +96,7 @@ async fn spawn_relay(
             "copy",
             "-f",
             "flv",
-            &format!("{}/{}", target_url, stream_key),
+            &format!("{}/{}", relay.url, relay.stream_key),
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -118,9 +124,12 @@ async fn spawn_relay(
         }
     });
     // Task to monitor child process
-    let app_clone = app.clone();
     let id_clone = id;
     let child_monitor = shared_child.clone();
+    let retrying = Arc::new(AtomicBool::new(false));
+    // let relay_clone = relay.clone();
+    let retrying_clone = retrying.clone();
+    let app_clone = app.clone();
     tokio::spawn(async move {
         let mut child = child_monitor.lock().await;
         match child.wait().await {
@@ -134,6 +143,16 @@ async fn spawn_relay(
                     AppEvents::RelayFailed.as_str(),
                     (id_clone, format!("Exited with code {:?}", status.code())),
                 );
+                if !retrying_clone.swap(true, Ordering::SeqCst) {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+
+                    // Retry spawn
+                    // spawn_relay(&app_clone, &relay_clone).await;
+
+                    println!("🔁 Relay {} restarted", id_clone);
+
+                    retrying_clone.store(false, Ordering::SeqCst);
+                }
             }
             Err(e) => {
                 eprintln!("❌ Failed to wait on relay {}: {}", id_clone, e);
