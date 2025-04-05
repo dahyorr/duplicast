@@ -3,8 +3,8 @@ mod db;
 mod events;
 mod file_server;
 mod rtmp;
-use config::StartUpData;
-use db::RelayTargetPublic;
+use config::{AppState, StartUpData};
+use db::{EncoderSettings, RelayTargetPublic};
 use rtmp::relay;
 // use rtmp::stop_encoder;
 use std::sync::Arc;
@@ -99,6 +99,27 @@ async fn remove_relay_target(id: i64) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn get_encoder_settings(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<EncoderSettings, String> {
+    Ok(state.encoder_settings.lock().await.clone())
+}
+
+#[tauri::command]
+async fn update_encoder_settings(
+    state: tauri::State<'_, Arc<AppState>>,
+    settings: EncoderSettings,
+) -> Result<(), String> {
+    let pool = db::get_db_pool();
+    db::save_encoder_settings(&settings, &pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    *state.encoder_settings.lock().await = settings;
+    Ok(())
+}
+
 // async fn cleanup_all(app: &AppHandle) {
 //     // Stop all relays
 //     let _ = stop_all_relays(app.clone()).await;
@@ -135,7 +156,9 @@ pub fn run() {
             start_all_relays,
             stop_all_relays,
             stop_relay,
-            start_relay
+            start_relay,
+            get_encoder_settings,
+            update_encoder_settings,
         ])
         .setup(|app| {
             let app_handle = app.handle();
@@ -169,8 +192,12 @@ pub fn run() {
                 let mut ports = app_state.ports.lock().await;
                 ports.rtmp_port = port_info.rtmp_port;
                 ports.file_port = port_info.file_port;
+                let settings = db::load_encoder_settings(db_pool)
+                    .await
+                    .unwrap_or_else(|_| db::default_encoder_settings());
                 let app_clone_rtmp: tauri::AppHandle = app.clone();
                 let app_clone_file: tauri::AppHandle = app.clone();
+                *app_state.encoder_settings.lock().await = settings;
                 async_runtime::spawn(rtmp::init_rtmp_server(app_clone_rtmp, port_info.rtmp_port));
                 async_runtime::spawn(file_server::start_file_server(
                     app_clone_file,

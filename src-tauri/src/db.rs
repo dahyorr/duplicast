@@ -34,6 +34,20 @@ pub fn get_db_pool() -> &'static SqlitePool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct EncoderSettings {
+    pub video_bitrate: u32,
+    pub audio_bitrate: u32,
+    pub video_codec: String,
+    pub audio_codec: String,
+    pub preset: String,
+    pub tune: Option<String>,
+    pub bufsize: Option<u32>,
+    pub framerate: Option<u32>,
+    pub resolution: Option<String>,
+    pub use_passthrough: bool, 
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct RelayTarget {
     pub id: i64,
     pub tag: String,
@@ -118,4 +132,49 @@ pub async fn get_relay_target(id: i64, pool: &SqlitePool) -> Result<RelayTarget,
         .bind(id)
         .fetch_one(pool)
         .await
+}
+
+pub async fn load_encoder_settings(pool: &SqlitePool) -> Result<EncoderSettings, sqlx::Error> {
+    sqlx::query_as::<_, EncoderSettings>("SELECT * FROM encoder_settings ORDER BY id DESC LIMIT 1")
+        .fetch_one(pool)
+        .await
+}
+
+pub async fn save_encoder_settings(
+    settings: &EncoderSettings,
+    pool: &SqlitePool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO encoder_settings (
+            video_bitrate, audio_bitrate, video_codec, audio_codec, preset,
+            tune, bufsize, framerate, resolution
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(settings.video_bitrate)
+    .bind(settings.audio_bitrate)
+    .bind(&settings.video_codec)
+    .bind(&settings.audio_codec)
+    .bind(&settings.preset)
+    .bind(&settings.tune)
+    .bind(settings.bufsize)
+    .bind(settings.framerate)
+    .bind(&settings.resolution)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub fn default_encoder_settings() -> EncoderSettings {
+    EncoderSettings {
+        video_bitrate: 6000,
+        audio_bitrate: 160,
+        video_codec: "libx264".into(),
+        audio_codec: "aac".into(),
+        preset: "veryfast".into(),
+        tune: Some("zerolatency".into()),
+        bufsize: Some(8000),
+        framerate: None,
+        resolution: None,
+        use_passthrough: true
+    }
 }

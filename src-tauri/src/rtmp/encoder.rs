@@ -14,49 +14,47 @@ pub async fn start_encoder(
     let log_dir = config::log_output_dir(app);
     let log_file = std::fs::File::create(&log_dir.join("ffmpeg_encoder.log"))?;
     let log_file = Stdio::from(log_file);
-
     let out_dir = config::hls_output_dir(app);
     let out_path = config::hls_playlist_path(app);
     fs::create_dir_all(out_dir)?;
-    let output = format!(
-        "[f=hls:hls_time=6:hls_list_size=8:hls_flags=delete_segments]{}|[f=flv]pipe:1",
-        out_path.to_string_lossy()
-    );
-    let mut ffmpeg = Command::new("ffmpeg")
-        .args([
-            "-f",
-            "flv",
-            "-i",
-            "pipe:0",
+    let state = app.state::<Arc<config::AppState>>();
+    let settings = state.encoder_settings.lock().await.clone();
+    let mut args = vec!["-f", "flv", "-i", "pipe:0"];
+    let video_bitrate = format!("{}k", settings.video_bitrate);
+    let audio_bitrate = format!("{}k", settings.audio_bitrate);
+    let bufsize = format!("{}k", settings.bufsize.unwrap_or(8000));
+    if settings.use_passthrough {
+        args.extend(["-c:v", "copy", "-c:a", "copy"]);
+    } else {
+        args.extend([
             "-map",
             "0:v",
             "-map",
             "0:a",
             "-c:v",
-            "libx264",
+            &settings.video_codec,
             "-b:v",
-            "6000k",
+            &video_bitrate,
             "-bufsize",
-            "8000k",
+            &bufsize,
             "-preset",
-            "veryfast",
-            "-tune",
-            "zerolatency",
+            &settings.preset,
             "-c:a",
-            "aac",
+            &settings.audio_codec,
             "-b:a",
-            "160k",
-            "-f",
-            "tee",
-            // "hls",
-            // "-hls_time",
-            // "6",
-            // "-hls_list_size",
-            // "8",
-            // "-hls_flags",
-            // "delete_segments",
-            output.as_str(),
-        ])
+            &audio_bitrate,
+        ]);
+        if let Some(tune) = &settings.tune {
+            args.extend(["-tune", tune]);
+        }
+    }
+    let output = format!(
+        "[f=hls:hls_time=6:hls_list_size=8:hls_flags=delete_segments]{}|[f=flv]pipe:1",
+        out_path.to_string_lossy()
+    );
+    args.extend(["-f", "tee", output.as_str()]);
+    let mut ffmpeg = Command::new("ffmpeg")
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(log_file)
@@ -64,7 +62,6 @@ pub async fn start_encoder(
 
     let mut stdin = ffmpeg.stdin.take().unwrap();
     let stdout = ffmpeg.stdout.take().unwrap();
-    let state = app.state::<Arc<config::AppState>>();
 
     if stdin.write_all(&flv_header()).await.is_ok() {
         *state.encoder_stdin.lock().await = Some(stdin);

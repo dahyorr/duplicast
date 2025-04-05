@@ -19,6 +19,8 @@ use tokio::{
     task::JoinHandle,
 };
 
+use crate::db::{self, EncoderSettings};
+
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct PortInfo {
     pub rtmp_port: u16,
@@ -26,7 +28,7 @@ pub struct PortInfo {
 }
 
 #[derive(Debug, Clone, Serialize, FromRow)]
-pub struct StartUpData{
+pub struct StartUpData {
     pub ports: PortInfo,
     pub ips: Vec<String>,
 }
@@ -44,6 +46,7 @@ pub struct AppState {
     pub encoder_process: Mutex<Option<Child>>,
     pub encoder_stdin: Mutex<Option<ChildStdin>>,
     pub encoder_sequence_headers: Mutex<Vec<Vec<u8>>>,
+    pub encoder_settings: Mutex<EncoderSettings>,
     // pub metadata:
 }
 
@@ -72,6 +75,7 @@ impl AppState {
             relay_channels: Mutex::new(HashMap::new()),
             source_metadata: Mutex::new(None),
             encoder_sequence_headers: Mutex::new(vec![]),
+            encoder_settings: Mutex::new(db::default_encoder_settings()),
         }
     }
 
