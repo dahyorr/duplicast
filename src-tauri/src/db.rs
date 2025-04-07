@@ -1,9 +1,8 @@
-use serde::{Deserialize, Serialize};
-use sqlx::{migrate::Migrator, sqlite::SqlitePoolOptions, FromRow, SqlitePool};
+use sqlx::{migrate::Migrator, sqlite::SqlitePoolOptions, SqlitePool};
 use std::sync::OnceLock;
 use tauri::AppHandle;
 
-use crate::config;
+use crate::{config, models};
 
 static DB_POOL: OnceLock<SqlitePool> = OnceLock::new();
 // Path to migrations folder (relative to project root)
@@ -33,54 +32,10 @@ pub fn get_db_pool() -> &'static SqlitePool {
     DB_POOL.get().expect("DB not initialized")
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct EncoderSettings {
-    pub video_bitrate: u32,
-    pub audio_bitrate: u32,
-    pub video_codec: String,
-    pub audio_codec: String,
-    pub preset: String,
-    pub tune: Option<String>,
-    pub bufsize: Option<u32>,
-    pub framerate: Option<u32>,
-    pub resolution: Option<String>,
-    pub use_passthrough: bool, 
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct RelayTarget {
-    pub id: i64,
-    pub tag: String,
-    pub stream_key: String,
-    pub url: String,
-    pub enabled: bool,
-    pub created_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct RelayTargetPublic {
-    pub id: i64,
-    pub tag: String,
-    pub stream_key: String,
-    pub url: String,
-    pub enabled: bool,
-    pub created_at: Option<String>,
-}
-impl RelayTargetPublic {
-    pub fn from_relay_target(relay_target: &RelayTarget) -> Self {
-        Self {
-            id: relay_target.id,
-            tag: relay_target.tag.clone(),
-            stream_key: config::mask_key(&relay_target.stream_key),
-            url: relay_target.url.clone(),
-            enabled: relay_target.enabled,
-            created_at: relay_target.created_at.clone(),
-        }
-    }
-}
-
-pub async fn get_active_relay_targets(pool: &SqlitePool) -> Result<Vec<RelayTarget>, sqlx::Error> {
-    sqlx::query_as::<_, RelayTarget>("SELECT * FROM relay_targets WHERE enabled = 1")
+pub async fn get_active_relay_targets(
+    pool: &SqlitePool,
+) -> Result<Vec<models::RelayTarget>, sqlx::Error> {
+    sqlx::query_as::<_, models::RelayTarget>("SELECT * FROM relay_targets WHERE enabled = 1")
         .fetch_all(pool)
         .await
 }
@@ -100,7 +55,7 @@ pub async fn add_relay_target(
     Ok(())
 }
 
-pub async fn get_relay_targets(pool: &SqlitePool) -> Result<Vec<RelayTarget>, sqlx::Error> {
+pub async fn get_relay_targets(pool: &SqlitePool) -> Result<Vec<models::RelayTarget>, sqlx::Error> {
     sqlx::query_as("SELECT * FROM relay_targets ORDER BY enabled DESC")
         .fetch_all(pool)
         .await
@@ -127,21 +82,28 @@ pub async fn remove_relay_target(id: i64, pool: &SqlitePool) -> Result<(), sqlx:
     Ok(())
 }
 
-pub async fn get_relay_target(id: i64, pool: &SqlitePool) -> Result<RelayTarget, sqlx::Error> {
-    sqlx::query_as::<_, RelayTarget>("SELECT * FROM relay_targets WHERE id = ?")
+pub async fn get_relay_target(
+    id: i64,
+    pool: &SqlitePool,
+) -> Result<models::RelayTarget, sqlx::Error> {
+    sqlx::query_as::<_, models::RelayTarget>("SELECT * FROM relay_targets WHERE id = ?")
         .bind(id)
         .fetch_one(pool)
         .await
 }
 
-pub async fn load_encoder_settings(pool: &SqlitePool) -> Result<EncoderSettings, sqlx::Error> {
-    sqlx::query_as::<_, EncoderSettings>("SELECT * FROM encoder_settings ORDER BY id DESC LIMIT 1")
-        .fetch_one(pool)
-        .await
+pub async fn load_encoder_settings(
+    pool: &SqlitePool,
+) -> Result<models::EncoderSettings, sqlx::Error> {
+    sqlx::query_as::<_, models::EncoderSettings>(
+        "SELECT * FROM encoder_settings ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(pool)
+    .await
 }
 
 pub async fn save_encoder_settings(
-    settings: &EncoderSettings,
+    settings: &models::EncoderSettings,
     pool: &SqlitePool,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
@@ -162,19 +124,4 @@ pub async fn save_encoder_settings(
     .execute(pool)
     .await?;
     Ok(())
-}
-
-pub fn default_encoder_settings() -> EncoderSettings {
-    EncoderSettings {
-        video_bitrate: 6000,
-        audio_bitrate: 160,
-        video_codec: "libx264".into(),
-        audio_codec: "aac".into(),
-        preset: "veryfast".into(),
-        tune: Some("zerolatency".into()),
-        bufsize: Some(8000),
-        framerate: None,
-        resolution: None,
-        use_passthrough: true
-    }
 }

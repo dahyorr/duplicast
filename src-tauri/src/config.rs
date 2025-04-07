@@ -15,11 +15,10 @@ use tauri::{AppHandle, Manager};
 use tokio::{
     net::TcpListener,
     process::{Child, ChildStdin},
-    sync::{mpsc, Mutex},
-    task::JoinHandle,
+    sync::{broadcast, Mutex},
 };
 
-use crate::db::{self, EncoderSettings};
+use crate::{models::EncoderSettings, rtmp::relay::RelayHandle};
 
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct PortInfo {
@@ -42,20 +41,12 @@ pub struct AppState {
     pub source_metadata: Mutex<Option<StreamMetadata>>,
     pub ports: Arc<Mutex<PortInfo>>,
     pub relays: Mutex<HashMap<i64, RelayHandle>>,
-    pub relay_channels: Mutex<HashMap<i64, mpsc::Sender<Arc<Vec<u8>>>>>,
     pub encoder_process: Mutex<Option<Child>>,
     pub encoder_stdin: Mutex<Option<ChildStdin>>,
     pub encoder_sequence_headers: Mutex<Vec<Vec<u8>>>,
     pub encoder_settings: Mutex<EncoderSettings>,
+    pub encoder_tx: broadcast::Sender<Vec<u8>>,
     // pub metadata:
-}
-
-#[derive(Debug)]
-pub struct RelayHandle {
-    pub id: i64,
-    pub process: Arc<Mutex<Child>>,
-    pub rx_task: JoinHandle<()>,
-    // pub tx: mpsc::Sender<Arc<Vec<u8>>>,
 }
 
 impl AppState {
@@ -72,25 +63,15 @@ impl AppState {
             relays: Mutex::new(HashMap::new()),
             encoder_process: Mutex::new(None),
             encoder_stdin: Mutex::new(None),
-            relay_channels: Mutex::new(HashMap::new()),
             source_metadata: Mutex::new(None),
             encoder_sequence_headers: Mutex::new(vec![]),
-            encoder_settings: Mutex::new(db::default_encoder_settings()),
+            encoder_settings: Mutex::new(EncoderSettings::new()),
+            encoder_tx: broadcast::channel(16384).0,
         }
     }
 
     pub fn is_ready(&self) -> bool {
         self.rtmp_ready.load(Ordering::SeqCst) && self.file_ready.load(Ordering::SeqCst)
-    }
-
-    pub async fn register_relay_channel(&self, id: i64, tx: mpsc::Sender<Arc<Vec<u8>>>) {
-        let mut relay_channels = self.relay_channels.lock().await;
-        relay_channels.insert(id, tx);
-    }
-
-    pub async fn unregister_relay_channel(&self, id: i64) {
-        let mut relay_channels = self.relay_channels.lock().await;
-        relay_channels.remove(&id);
     }
 }
 

@@ -1,10 +1,10 @@
-use super::{fanout::start_fanout, utils::flv_header};
+use super::utils::{is_audio_aac_sequence_header, is_video_keyframe_avc_sequence_header,flv_header};
 
 use crate::config::{self};
 use crate::events::AppEvents;
 use std::{fs, process::Stdio, sync::Arc};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 pub async fn start_encoder(
@@ -67,12 +67,38 @@ pub async fn start_encoder(
         *state.encoder_stdin.lock().await = Some(stdin);
     }
     *state.encoder_process.lock().await = Some(ffmpeg);
+    let encoder_tx = state.encoder_tx.clone();
 
     // possibly store fanout task
-    let app_clone = app.clone();
+    let cloned_state = Arc::clone(&state);
 
-    let _fanout_task = tokio::spawn(async move {
-        start_fanout(app_clone, stdout).await;
+    tokio::spawn(async move {
+        let mut buf = [0u8; 4096];
+        let mut stdout = stdout;
+
+        loop {
+            match stdout.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    let chunk = buf[..n].to_vec();
+
+                    // Send to broadcast channel
+                    let _ = encoder_tx.send(chunk.clone());
+
+                    // Optionally detect and store headers
+                    if is_video_keyframe_avc_sequence_header(&chunk)
+                        || is_audio_aac_sequence_header(&chunk)
+                    {
+                        let mut headers = cloned_state.encoder_sequence_headers.lock().await;
+                        headers.push(chunk);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("❌ Fanout read error: {}", e);
+                    break;
+                }
+            }
+        }
     });
 
     Ok(())

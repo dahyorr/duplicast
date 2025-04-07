@@ -2,10 +2,11 @@ mod config;
 mod db;
 mod events;
 mod file_server;
+mod models;
 mod rtmp;
 use config::{AppState, StartUpData};
-use db::{EncoderSettings, RelayTargetPublic};
-use rtmp::relay;
+use models::{EncoderSettings, RelayTargetPublic};
+use rtmp::relay::{start_relays, stop_relays, RelayHandle};
 // use rtmp::stop_encoder;
 use std::sync::Arc;
 use tauri::{async_runtime, AppHandle, Manager};
@@ -35,29 +36,54 @@ async fn get_startup_data(
 
 #[tauri::command]
 async fn start_all_relays(app: AppHandle) -> Result<(), String> {
-    let _ = relay::start_relays(&app).await;
+    let _ = start_relays(&app).await;
     Ok(())
 }
 
 #[tauri::command]
 async fn stop_all_relays(app: AppHandle) -> Result<(), String> {
-    let _ = relay::stop_relays(&app).await;
+    let _ = stop_relays(&app).await;
     Ok(())
 }
 
 #[tauri::command]
-async fn start_relay(app: AppHandle, id: i64) -> Result<(), String> {
+async fn start_relay(
+    state: tauri::State<'_, Arc<config::AppState>>,
+    app: AppHandle,
+    id: i64,
+) -> Result<(), String> {
+    // chk if relay target in state
+    let mut relays = state.relays.lock().await;
+    if let Some(relay) = relays.get_mut(&id) {
+        if relay.active.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("Relay is already active".to_string());
+        }
+        let _ = relay.start(&app).await;
+        return Ok(());
+    }
     let pool = db::get_db_pool();
-    let relay = db::get_relay_target(id, &pool)
+    let relay_db = db::get_relay_target(id, &pool)
         .await
         .map_err(|e| e.to_string())?;
-    let _ = relay::start_relay(&app, &relay).await;
+    let mut relay = RelayHandle::from_relay_target(&relay_db, state.encoder_tx.subscribe());
+    let _ = relay.start(&app).await;
     Ok(())
 }
 
 #[tauri::command]
-async fn stop_relay(app: AppHandle, id: i64) -> Result<(), String> {
-    let _ = relay::stop_relay(&app, id).await;
+async fn stop_relay(
+    state: tauri::State<'_, Arc<config::AppState>>,
+    app: AppHandle,
+    id: i64,
+) -> Result<(), String> {
+    let mut relays = state.relays.lock().await;
+    if let Some(relay) = relays.get_mut(&id) {
+        if relay.active.load(std::sync::atomic::Ordering::SeqCst) {
+            relay.stop(&app).await;
+        } else {
+            return Err("Relay is not active".to_string());
+        }
+    }
     Ok(())
 }
 
@@ -70,7 +96,7 @@ async fn add_relay_target(stream_key: &str, url: &str, tag: &str) -> Result<(), 
 }
 
 #[tauri::command]
-async fn get_relay_targets() -> Result<Vec<db::RelayTargetPublic>, String> {
+async fn get_relay_targets() -> Result<Vec<models::RelayTargetPublic>, String> {
     let pool = db::get_db_pool();
     let targets = db::get_relay_targets(&pool)
         .await
@@ -194,7 +220,7 @@ pub fn run() {
                 ports.file_port = port_info.file_port;
                 let settings = db::load_encoder_settings(db_pool)
                     .await
-                    .unwrap_or_else(|_| db::default_encoder_settings());
+                    .unwrap_or_else(|_| EncoderSettings::new());
                 let app_clone_rtmp: tauri::AppHandle = app.clone();
                 let app_clone_file: tauri::AppHandle = app.clone();
                 *app_state.encoder_settings.lock().await = settings;
