@@ -92,9 +92,9 @@ pub fn create_metadata_tag(metadata: &StreamMetadata) -> Vec<u8> {
 }
 
 pub fn is_video_keyframe_avc_sequence_header(tag: &[u8]) -> bool {
-  tag.len() > 13 && tag[0] == 0x09 && (tag[11] & 0xF0) == 0x10 && tag[12] == 0
+    tag.len() > 13 && tag[0] == 0x09 && (tag[11] & 0xF0) == 0x10 && tag[12] == 0
 }
 
 pub fn is_audio_aac_sequence_header(tag: &[u8]) -> bool {
-  tag.len() > 13 && tag[0] == 0x08 && (tag[11] & 0xF0) == 0xA0 && tag[12] == 0
+    tag.len() > 13 && tag[0] == 0x08 && (tag[11] & 0xF0) == 0xA0 && tag[12] == 0
 }

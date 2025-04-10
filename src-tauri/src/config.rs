@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    fs,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -136,10 +137,10 @@ pub fn get_data_dir(app: &AppHandle) -> PathBuf {
     data_dir
 }
 pub fn hls_output_dir(app: &AppHandle) -> PathBuf {
-    get_data_dir(app).join("./hls_output")
+    get_data_dir(app).join("hls_output")
 }
 pub fn log_output_dir(app: &AppHandle) -> PathBuf {
-    get_data_dir(app).join("./logs")
+    get_data_dir(app).join("logs")
 }
 pub fn hls_playlist_path(app: &AppHandle) -> PathBuf {
     hls_output_dir(app).join("playlist.m3u8")
@@ -152,4 +153,32 @@ pub fn mask_key(key: &str) -> String {
         let visible = &key[key.len() - 4..];
         format!("{}{}", "*".repeat(key.len() - 4), visible)
     }
+}
+
+pub fn preflight_config(app: &AppHandle) {
+    let hls_output_dir = hls_output_dir(app);
+    let log_output_dir = log_output_dir(app);
+    std::fs::create_dir_all(log_output_dir).unwrap_or_default();
+    // delete hld_output_dir contents
+    if hls_output_dir.exists() {
+        clear_folder(&hls_output_dir).unwrap_or_default();
+    } else {
+        std::fs::create_dir_all(&hls_output_dir).unwrap_or_default();
+    }
+}
+
+pub fn clear_folder(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() {
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let entry_path = entry.path();
+
+            if entry_path.is_dir() {
+                fs::remove_dir_all(&entry_path)?;
+            } else {
+                fs::remove_file(&entry_path)?;
+            }
+        }
+    }
+    Ok(())
 }

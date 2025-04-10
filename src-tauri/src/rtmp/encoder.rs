@@ -1,8 +1,10 @@
-use super::utils::{is_audio_aac_sequence_header, is_video_keyframe_avc_sequence_header,flv_header};
+use super::utils::{
+    flv_header, is_audio_aac_sequence_header, is_video_keyframe_avc_sequence_header,
+};
 
-use crate::config::{self};
+use crate::config::{self, clear_folder};
 use crate::events::AppEvents;
-use std::{fs, process::Stdio, sync::Arc};
+use std::{process::Stdio, sync::Arc};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -15,8 +17,8 @@ pub async fn start_encoder(
     let log_file = std::fs::File::create(&log_dir.join("ffmpeg_encoder.log"))?;
     let log_file = Stdio::from(log_file);
     let out_dir = config::hls_output_dir(app);
-    let out_path = config::hls_playlist_path(app);
-    fs::create_dir_all(out_dir)?;
+    clear_folder(&out_dir).unwrap_or_default();
+    let out_path = config::hls_playlist_path(app).to_string_lossy().to_string();
     let state = app.state::<Arc<config::AppState>>();
     let settings = state.encoder_settings.lock().await.clone();
     let mut args = vec!["-f", "flv", "-i", "pipe:0"];
@@ -49,10 +51,23 @@ pub async fn start_encoder(
         }
     }
     let output = format!(
-        "[f=hls:hls_time=6:hls_list_size=8:hls_flags=delete_segments]{}|[f=flv]pipe:1",
-        out_path.to_string_lossy()
+        "[f=hls:hls_time=6:hls_list_size=8:hls_flags=delete_segments]\"{}\"|[f=flv]pipe:1",
+        out_path
     );
-    args.extend(["-f", "tee", output.as_str()]);
+    args.extend([
+        "-f",
+        "hls",
+        "-hls_flags",
+        "delete_segments",
+        "-hls_time",
+        "6",
+        "-hls_list_size",
+        "8",
+        "-hls_flags",
+        "delete_segments",
+        out_path.as_str(),
+    ]);
+    // args.extend(["-f", "tee", output.as_str()]);
     let mut ffmpeg = Command::new("ffmpeg")
         .args(args)
         .stdin(Stdio::piped())
@@ -124,10 +139,4 @@ pub async fn stop_encoder(app: &AppHandle) {
         .unwrap_or_else(|_| {
             eprintln!("⚠️ Failed to emit stream preview stopped event");
         });
-    let out_dir = config::hls_output_dir(&app);
-    if out_dir.exists() {
-        fs::remove_dir_all(out_dir).unwrap_or_else(|_| {
-            eprintln!("⚠️ Failed to remove preview output directory");
-        });
-    }
 }

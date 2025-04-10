@@ -60,12 +60,12 @@ impl RelayHandle {
         let log_file = std::fs::File::create(log_dir.join(format!("relay_{}.log", self.id)))?;
         let log_file = Stdio::from(log_file);
         let relays = state.relays.lock().await;
+        println!("🔄 Starting relay {}", self.id);
 
         if relays.contains_key(&self.id) {
             eprintln!("⚠️ Relay id:{} already exists", self.id);
             return Ok(());
         }
-
         let mut child = Command::new("ffmpeg")
             .args([
                 "-f",
@@ -138,6 +138,13 @@ impl RelayHandle {
         self.process = Some(shared_child);
         self.rx_task = Some(write_task);
         self.active.store(true, Ordering::SeqCst);
+
+        app.emit(AppEvents::RelayActive.as_str(), self.id)
+            .unwrap_or_else(|_| {
+                eprintln!("⚠️ Failed to emit active event for relay id:{}", self.id);
+            });
+
+        println!("🟢 Relay {} started", self.id);
         Ok(())
     }
 
@@ -155,7 +162,6 @@ impl RelayHandle {
     }
 }
 
-
 pub async fn start_relays(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let pool = db::get_db_pool();
     let relays = db::get_active_relay_targets(&pool).await?;
@@ -165,11 +171,7 @@ pub async fn start_relays(app: &AppHandle) -> Result<(), Box<dyn std::error::Err
     for relay in relays {
         let mut relay_handle = RelayHandle::from_relay_target(&relay, tx.subscribe());
         relay_handle.start(app).await?;
-        state
-            .relays
-            .lock()
-            .await
-            .insert(relay.id, relay_handle);
+        state.relays.lock().await.insert(relay.id, relay_handle);
     }
     Ok(())
 }

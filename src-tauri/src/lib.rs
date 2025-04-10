@@ -61,11 +61,13 @@ async fn start_relay(
         let _ = relay.start(&app).await;
         return Ok(());
     }
+
     let pool = db::get_db_pool();
     let relay_db = db::get_relay_target(id, &pool)
         .await
         .map_err(|e| e.to_string())?;
     let mut relay = RelayHandle::from_relay_target(&relay_db, state.encoder_tx.subscribe());
+    
     let _ = relay.start(&app).await;
     Ok(())
 }
@@ -196,15 +198,7 @@ pub fn run() {
             //     .unwrap_or_else(|| std::env::current_dir().unwrap());
 
             app.manage(app_state);
-            let log_dir = config::log_output_dir(&app_handle);
-            if !log_dir.exists() {
-                std::fs::create_dir_all(&log_dir).expect("Failed to create log directory");
-            }
-            //clear hls_output_dir on start
-            let hls_dir = config::hls_output_dir(&app_handle);
-            if hls_dir.exists() {
-                std::fs::remove_dir_all(&hls_dir).expect("Failed to remove hls_output_dir");
-            }
+            config::preflight_config(&app_handle);
             let app = app_handle.clone();
             async_runtime::spawn(async move {
                 let _ = db::init_db(&app).await.expect("❌ Failed to init DB");
