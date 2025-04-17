@@ -53,7 +53,7 @@ impl RelayTargetPublic {
 impl EncoderSettings {
     pub fn new() -> Self {
         Self {
-            video_bitrate: 6000,
+            video_bitrate: 3000,
             audio_bitrate: 160,
             video_codec: "libx264".into(),
             audio_codec: "aac".into(),
@@ -62,7 +62,7 @@ impl EncoderSettings {
             bufsize: Some(8000),
             framerate: None,
             resolution: None,
-            use_passthrough: true,
+            use_passthrough: false,
         }
     }
 }

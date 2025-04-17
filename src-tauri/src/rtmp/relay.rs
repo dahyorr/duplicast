@@ -59,13 +59,8 @@ impl RelayHandle {
         let log_dir = config::log_output_dir(app);
         let log_file = std::fs::File::create(log_dir.join(format!("relay_{}.log", self.id)))?;
         let log_file = Stdio::from(log_file);
-        let relays = state.relays.lock().await;
         println!("🔄 Starting relay {}", self.id);
 
-        if relays.contains_key(&self.id) {
-            eprintln!("⚠️ Relay id:{} already exists", self.id);
-            return Ok(());
-        }
         let mut child = Command::new("ffmpeg")
             .args([
                 "-f",

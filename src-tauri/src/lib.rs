@@ -61,14 +61,13 @@ async fn start_relay(
         let _ = relay.start(&app).await;
         return Ok(());
     }
-
     let pool = db::get_db_pool();
     let relay_db = db::get_relay_target(id, &pool)
         .await
         .map_err(|e| e.to_string())?;
     let mut relay = RelayHandle::from_relay_target(&relay_db, state.encoder_tx.subscribe());
-    
     let _ = relay.start(&app).await;
+    relays.insert(id, relay);
     Ok(())
 }
 
