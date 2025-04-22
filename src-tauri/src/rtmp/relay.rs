@@ -9,6 +9,8 @@ use std::{
     },
     time::Duration,
 };
+use rml_rtmp::handshake::{Handshake, PeerType};
+use rml_rtmp::sessions::{ClientSession, ClientSessionConfig, ClientSessionError, ClientSessionResult, ServerSession, ServerSessionResult};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::{
     io::AsyncWriteExt,
@@ -16,6 +18,9 @@ use tokio::{
     sync::{broadcast, Mutex},
     task::JoinHandle,
 };
+use tokio::net::TcpStream;
+use url::Url;
+use crate::rtmp::handshake::handle_relay_handshake;
 
 #[derive(Debug)]
 struct RelayCredentials {
@@ -55,6 +60,91 @@ impl RelayHandle {
     }
 
     pub async fn start(&mut self, app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+        let url = Url::parse(&self.credentials.url)?;
+        let host = url.host_str().ok_or("missing host")?;
+        let port = url.port().unwrap_or(1935);
+        let mut path_segments = url.path_segments().ok_or("invalid path")?;
+        let app_name = path_segments.next().ok_or("missing app name")?.to_string();
+
+
+        // 2) TCP dial
+        let addr = (host, port).to_socket_addrs()?.next().ok_or("cannot resolve")?;
+        let socket = TcpStream::connect(addr).await?;
+        socket.set_nodelay(true)?;
+
+        // 3) handshake & connect
+        let (mut socket,remaining) = handle_relay_handshake(socket).await?;
+        let (socket, session) = self.setup_rtmp_client_session(socket, remaining).await?;
+
+        // feed any leftover handshake bytes into the session
+
+
+
+        let mut buf = [0u8; 4096];
+
+        loop {
+            let n = socket.read(&mut buf).await.unwrap();
+            let responses = session.handle_input(&buf[..n])?;
+            for res in responses {
+                match res {
+                    ClientSessionResult::HandshakeDone => {
+                        // now request connect to “app” (everything after the host in the URL)
+                        let app_name = url.split('/').nth(1).unwrap().to_string();
+                        let msgs = session.request_connection(app_name)?;
+                        for m in msgs { socket.write_all(&m)?; }
+                    }
+                    ClientSessionResult::ConnectResponse { .. } => {
+                        // 3) request to publish
+                        let msgs = session.request_publishing(stream_key.to_string(), PublishRequestType::Live)?;
+                        for m in msgs { socket.write_all(&m)?; }
+                    }
+                    ClientSessionResult::PublishResponse { .. } => {
+                        // 4) send metadata once
+                        let msgs = session.publish_metadata(&*self.metadata)?;
+                        for m in msgs { socket.write_all(&m)?; }
+
+                        // fire off the background “pump” of data
+                        let mut writer = socket.clone();
+                        let mut session = session.clone();
+                        let mut rx = self.rx.resubscribe();
+                        tauri::async_runtime::spawn(async move {
+                            let mut ts: RtmpTimestamp = 0.into();
+                            while let Ok(chunk) = rx.recv().await {
+                                // (you’ll need to parse out whether it’s audio or video, extract pts,
+                                // e.g. using your flv_header parsing helpers, then call:)
+                                let data = Bytes::from(chunk);
+                                // example for video:
+                                let msgs = session.publish_video_data(data, ts, false).unwrap();
+                                for m in msgs { writer.write_all(&m).await.unwrap(); }
+                                // increment timestamp however you track it
+                                ts = ts + 40;
+                            }
+                        });
+
+                        // notify Tauri
+                        app.emit(AppEvents::RelayActive.as_str(), self.id).unwrap();
+                        self.active = true;
+                        return Ok(());
+                    }
+                    other => {
+                        // handle ping requests, etc.
+                        if let Some(bytes) = other.into_bytes() {
+                            socket.write_all(&bytes)?;
+                        }
+                    }
+                }
+            }
+        }
+
+        let results = session("live2", "your‑stream‑key")?;
+        for r in results {
+            if let ClientSessionResult::OutboundResponse(pkt) = r {
+                socket.write_all(&pkt.bytes).await?;
+            }
+        }
+
+        socket.write_all(&outbound).await.unwrap();
+
         let state = app.state::<Arc<config::AppState>>();
         let log_dir = config::log_output_dir(app);
         let log_file = std::fs::File::create(log_dir.join(format!("relay_{}.log", self.id)))?;
@@ -155,6 +245,34 @@ impl RelayHandle {
             self.active.store(false, Ordering::SeqCst);
         }
     }
+
+     async fn setup_rtmp_client_session(&mut self,  mut socket: TcpStream, remaining: Vec<u8>) -> Result<( TcpStream, ClientSession), Box<dyn std::error::Error>> {
+         let url = Url::parse(&self.credentials.url)?;
+         let mut path_segments = url.path_segments().ok_or("invalid path")?;
+         let app_name = path_segments.next().ok_or("missing app name")?.to_string();
+
+         let config = ClientSessionConfig::new();
+         let (mut session, initial_session_results) = match ClientSession::new(config) {
+             Ok(results) => results,
+             Err(error) => return Err(error.to_string().into()),
+         };
+         if !remaining.is_empty() {
+             session.handle_input(&remaining)?;
+         }
+
+         for result in initial_session_results {
+             if let ClientSessionResult::OutboundResponse(packet) = result {
+                 socket.write_all(&packet.bytes).await?;
+             }
+         }
+
+         let connect_req = session.request_connection(app_name)?;
+         if let ClientSessionResult::OutboundResponse(pkt) = connect_req {
+             socket.write_all(&pkt.bytes).await?;
+         }
+
+         Ok((socket,session))
+     }
 }
 
 pub async fn start_relays(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {

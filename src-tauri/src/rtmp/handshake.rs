@@ -75,3 +75,43 @@ async fn handle_connection(
         };
     }
 }
+
+pub async fn handle_relay_handshake(
+    mut socket: TcpStream,
+) -> Result<(TcpStream, Vec<u8>), Box<dyn std::error::Error>> {
+    println!("📡 Handling RTMP connection...");
+
+    let mut client = Handshake::new(PeerType::Client);
+    let c0_and_c1 = client.generate_outbound_p0_and_p1().unwrap();
+    socket.write_all(&c0_and_c1).await?;
+    let mut buffer = [0u8; 4096];
+    let mut received_data = Vec::new();
+
+    loop {
+        let n = socket.read(&mut buffer).await?;
+        if n == 0 {
+            return Err("🔌 Connection closed during handshake".into());
+        }
+        received_data.extend_from_slice(&buffer[..n]);
+
+        match client.process_bytes(&received_data) {
+            Ok(HandshakeProcessResult::InProgress { response_bytes }) => {
+                socket.write_all(&response_bytes).await?;
+                received_data.clear(); // Reset buffer until next chunk
+            }
+
+            Ok(HandshakeProcessResult::Completed {
+                   response_bytes,
+                   remaining_bytes,
+               }) => {
+                socket.write_all(&response_bytes).await?;
+                println!("✅ RTMP(Relay) handshake complete 🤝");
+                return Ok((socket, remaining_bytes.to_vec()));
+            }
+
+            Err(e) => {
+                return Err(format!("❌ Handshake error: {:?}", e).into());
+            }
+        };
+    }
+}
