@@ -33,7 +33,6 @@ pub struct StartUpData {
     pub ips: Vec<String>,
 }
 
-#[derive(Debug)]
 pub struct AppState {
     pub rtmp_ready: Arc<AtomicBool>,
     pub file_ready: Arc<AtomicBool>,

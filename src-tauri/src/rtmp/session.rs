@@ -12,11 +12,12 @@ use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
 };
 use std::sync::Arc;
-use tauri::{async_runtime, AppHandle, Emitter, Manager};
+use tauri::{async_runtime, AppHandle, Emitter, Manager, State};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
+use crate::config::AppState;
 
 pub async fn handle_session(
     app: &AppHandle,
@@ -146,14 +147,9 @@ async fn handle_session_event(
             data, timestamp, ..
         } => {
             // println!("🎵 Audio data received: {} bytes", data.len());
-            let state = app.state::<Arc<config::AppState>>();
+            let state = app.state::<Arc<AppState>>();
             let tagged_data = flv_tag(FlvTagType::Audio, timestamp.value, &data);
-            let mut guard = state.encoder_stdin.lock().await;
-            if let Some(stdin) = guard.as_mut() {
-                if let Err(e) = stdin.write_all(&tagged_data).await {
-                    eprintln!("❌ Failed to write to encoder stdin: {}", e);
-                }
-            }
+            write_to_encoder_stdin(&state,&tagged_data).await;
             Ok(vec![])
         }
 
@@ -161,14 +157,9 @@ async fn handle_session_event(
             data, timestamp, ..
         } => {
             // println!("📹 Video data received: {} bytes", data.len());
-            let state = app.state::<Arc<config::AppState>>();
+            let state = app.state::<Arc<AppState>>();
             let tagged_data = flv_tag(FlvTagType::Video, timestamp.value, &data);
-            let mut guard = state.encoder_stdin.lock().await;
-            if let Some(stdin) = guard.as_mut() {
-                if let Err(e) = stdin.write_all(&tagged_data).await {
-                    eprintln!("❌ Failed to write to encoder stdin: {}", e);
-                }
-            }
+            write_to_encoder_stdin(&state,&tagged_data).await;
             Ok(vec![])
         }
 
@@ -179,13 +170,8 @@ async fn handle_session_event(
         } => {
             println!("📊 Metadata for stream {}: {:?}", stream_key, metadata);
             let tagged_data = create_metadata_tag(&metadata);
-            let state = app.state::<Arc<config::AppState>>();
-            let mut guard = state.encoder_stdin.lock().await;
-            if let Some(stdin) = guard.as_mut() {
-                if let Err(e) = stdin.write_all(&tagged_data).await {
-                    eprintln!("❌ Failed to write to encoder stdin: {}", e);
-                }
-            }
+            let state = app.state::<Arc<AppState>>();
+            write_to_encoder_stdin(&state,&tagged_data).await;
             *state.source_metadata.lock().await = Some(metadata.clone());
             // println!("Metadata: {}", metadata.());
             Ok(vec![])
@@ -212,6 +198,15 @@ async fn handle_session_event(
         other => {
             println!("ℹ️  Unhandled RTMP event: {:?}", other);
             Ok(vec![])
+        }
+    }
+}
+
+async fn write_to_encoder_stdin(state: &State<'_, Arc<AppState>>, data: &Vec<u8>){
+    let mut guard = state.encoder_stdin.lock().await;
+    if let Some(stdin) = guard.as_mut() {
+        if let Err(e) = stdin.write_all(data).await {
+            eprintln!("❌ Failed to write to encoder stdin: {}", e);
         }
     }
 }

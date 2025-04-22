@@ -14,7 +14,7 @@ pub async fn init_rtmp_server(app: AppHandle, port: u16) {
         .await
         .expect("Failed to bind");
     println!("🟢 RTMP server listening on rtmp://localhost:1580");
-    let app_state = app.state::<Arc<crate::config::AppState>>();
+    let app_state = app.state::<Arc<config::AppState>>();
     app_state.rtmp_ready.store(true, Ordering::SeqCst);
     loop {
         let (socket, addr) = listener.accept().await.expect("Failed to accept");
@@ -101,9 +101,9 @@ pub async fn handle_relay_handshake(
             }
 
             Ok(HandshakeProcessResult::Completed {
-                   response_bytes,
-                   remaining_bytes,
-               }) => {
+                response_bytes,
+                remaining_bytes,
+            }) => {
                 socket.write_all(&response_bytes).await?;
                 println!("✅ RTMP(Relay) handshake complete 🤝");
                 return Ok((socket, remaining_bytes.to_vec()));

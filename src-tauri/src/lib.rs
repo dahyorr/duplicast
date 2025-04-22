@@ -12,12 +12,12 @@ use std::sync::Arc;
 use tauri::{async_runtime, AppHandle, Manager};
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
-fn check_if_ready(state: tauri::State<'_, Arc<config::AppState>>) -> bool {
+fn check_if_ready(state: tauri::State<'_, Arc<AppState>>) -> bool {
     state.is_ready()
 }
 
 #[tauri::command]
-fn check_if_stream_active(state: tauri::State<'_, Arc<config::AppState>>) -> bool {
+fn check_if_stream_active(state: tauri::State<'_, Arc<AppState>>) -> bool {
     state
         .source_active
         .load(std::sync::atomic::Ordering::SeqCst)
@@ -25,8 +25,8 @@ fn check_if_stream_active(state: tauri::State<'_, Arc<config::AppState>>) -> boo
 
 #[tauri::command]
 async fn get_startup_data(
-    state: tauri::State<'_, Arc<config::AppState>>,
-) -> Result<config::StartUpData, String> {
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<StartUpData, String> {
     let ports = state.ports.lock().await.clone();
     Ok(StartUpData {
         ports,
@@ -48,7 +48,7 @@ async fn stop_all_relays(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn start_relay(
-    state: tauri::State<'_, Arc<config::AppState>>,
+    state: tauri::State<'_, Arc<AppState>>,
     app: AppHandle,
     id: i64,
 ) -> Result<(), String> {
@@ -73,7 +73,7 @@ async fn start_relay(
 
 #[tauri::command]
 async fn stop_relay(
-    state: tauri::State<'_, Arc<config::AppState>>,
+    state: tauri::State<'_, Arc<AppState>>,
     app: AppHandle,
     id: i64,
 ) -> Result<(), String> {
@@ -97,7 +97,7 @@ async fn add_relay_target(stream_key: &str, url: &str, tag: &str) -> Result<(), 
 }
 
 #[tauri::command]
-async fn get_relay_targets() -> Result<Vec<models::RelayTargetPublic>, String> {
+async fn get_relay_targets() -> Result<Vec<RelayTargetPublic>, String> {
     let pool = db::get_db_pool();
     let targets = db::get_relay_targets(&pool)
         .await
@@ -189,7 +189,7 @@ pub fn run() {
         ])
         .setup(|app| {
             let app_handle = app.handle();
-            let app_state = Arc::new(config::AppState::new(0, 0));
+            let app_state = Arc::new(AppState::new(0, 0));
             // Create the log directory if it doesn't exist
             // let data_dir = app
             //     .path_resolver()
@@ -207,15 +207,15 @@ pub fn run() {
                 let port_info = config::get_or_init_ports(db_pool)
                     .await
                     .expect("❌ Failed to init ports");
-                let app_state = app.state::<Arc<config::AppState>>();
+                let app_state = app.state::<Arc<AppState>>();
                 let mut ports = app_state.ports.lock().await;
                 ports.rtmp_port = port_info.rtmp_port;
                 ports.file_port = port_info.file_port;
                 let settings = db::load_encoder_settings(db_pool)
                     .await
                     .unwrap_or_else(|_| EncoderSettings::new());
-                let app_clone_rtmp: tauri::AppHandle = app.clone();
-                let app_clone_file: tauri::AppHandle = app.clone();
+                let app_clone_rtmp: AppHandle = app.clone();
+                let app_clone_file: AppHandle = app.clone();
                 *app_state.encoder_settings.lock().await = settings;
                 async_runtime::spawn(rtmp::init_rtmp_server(app_clone_rtmp, port_info.rtmp_port));
                 async_runtime::spawn(file_server::start_file_server(

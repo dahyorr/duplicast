@@ -21,7 +21,7 @@ pub async fn start_encoder(
     clear_folder(&out_dir).unwrap_or_default();
     let out_path = config::hls_playlist_path(app);
     let state = app.state::<Arc<config::AppState>>();
-    let settings = state.encoder_settings.lock().await.clone();
+    let settings = state.encoder_settings.lock().await;
     let video_bitrate = format!("{}k", settings.video_bitrate);
     let audio_bitrate = format!("{}k", settings.audio_bitrate);
     let bufsize = format!("{}k", settings.bufsize.unwrap_or(8000));
