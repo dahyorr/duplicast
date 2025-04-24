@@ -91,28 +91,48 @@ pub fn create_metadata_tag(metadata: &StreamMetadata) -> Vec<u8> {
     flv_tag(FlvTagType::ScriptData, 0, &body) // FLV script tag with timestamp 0
 }
 
-pub fn peek_flv_tag(buf: &[u8]) -> Option<(FlvTagType, u32, u32)> {
-    if buf.len() < 15 {
+// pub fn peek_flv_tag(buf: &[u8]) -> Option<(FlvTagType, u32, u32)> {
+//     if buf.len() < 15 {
+//         return None;
+//     }
+//     let tag_type = match buf[0] {
+//         0x08 => FlvTagType::Audio,
+//         0x09 => FlvTagType::Video,
+//         0x12 => FlvTagType::ScriptData,
+//         _    => return None,
+//     };
+//     let data_size = ((buf[1] as u32) << 16)
+//                   | ((buf[2] as u32) <<  8)
+//                   |  (buf[3] as u32);
+//     // timestamp is spread across bytes 4–7, etc…
+//     let ts_lo = ((buf[4] as u32) << 16)
+//               | ((buf[5] as u32) <<  8)
+//               |  (buf[6] as u32);
+//     let ts_hi = (buf[7] as u32) << 24;
+//     let timestamp = ts_lo | ts_hi;
+//     Some((tag_type, data_size, timestamp))
+// }
+pub fn extract_flv_tag_payload(tag: &[u8]) -> Option<(FlvTagType, u32, Vec<u8>)> {
+    if tag.len() < 11 {
         return None;
     }
-    let tag_type = match buf[0] {
+
+    let tag_type = match tag[0] {
         0x08 => FlvTagType::Audio,
         0x09 => FlvTagType::Video,
         0x12 => FlvTagType::ScriptData,
         _    => return None,
     };
-    let data_size = ((buf[1] as u32) << 16)
-                  | ((buf[2] as u32) <<  8)
-                  |  (buf[3] as u32);
-    // timestamp is spread across bytes 4–7, etc…
-    let ts_lo = ((buf[4] as u32) << 16)
-              | ((buf[5] as u32) <<  8)
-              |  (buf[6] as u32);
-    let ts_hi = (buf[7] as u32) << 24;
-    let timestamp = ts_lo | ts_hi;
-    Some((tag_type, data_size, timestamp))
-}
+    let data_size = ((tag[1] as u32) << 16) | ((tag[2] as u32) << 8) | tag[3] as u32;
+    let timestamp = ((tag[4] as u32) << 16) | ((tag[5] as u32) << 8) | tag[6] as u32 | ((tag[7] as u32) << 24);
 
+    if tag.len() < (11 + data_size as usize) {
+        return None;
+    }
+
+    let payload = tag[11..11 + data_size as usize].to_vec();
+    Some((tag_type, timestamp, payload))
+}
 pub fn is_video_keyframe_avc_sequence_header(tag: &[u8]) -> bool {
     tag.len() > 13 && tag[0] == 0x09 && (tag[11] & 0xF0) == 0x10 && tag[12] == 0
 }

@@ -82,7 +82,7 @@ pub async fn start_encoder(
                 Ok(n) => {
                     let chunk = buf[..n].to_vec();
 
-                    // Send to broadcast channel
+                    // Send it to a broadcast channel
                     let _ = encoder_tx.send(chunk.clone());
 
                     // Optionally detect and store headers

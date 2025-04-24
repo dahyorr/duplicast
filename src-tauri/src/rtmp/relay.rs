@@ -1,5 +1,5 @@
 use crate::rtmp::handshake::handle_relay_handshake;
-use crate::rtmp::utils::{peek_flv_tag, FlvTagType};
+use crate::rtmp::utils::{extract_flv_tag_payload, FlvTagType};
 use crate::{config, db, events::AppEvents, models};
 use bytes::Bytes;
 use rml_rtmp::sessions::{
@@ -12,10 +12,10 @@ use std::sync::{
     Arc,
 };
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::AsyncReadExt;
+use tokio::io::{split, AsyncReadExt};
 use tokio::net::TcpStream;
 use tokio::{
-    io::AsyncWriteExt,
+    io::{ReadHalf, WriteHalf, AsyncWriteExt},
     sync::{broadcast, Mutex},
 };
 use url::Url;
@@ -32,7 +32,8 @@ pub struct RelayHandle {
     credentials: RelayCredentials,
     pub rx: broadcast::Receiver<Vec<u8>>,
     pub rx_task: Option<tauri::async_runtime::JoinHandle<()>>,
-    pub socket: Option<Arc<Mutex<TcpStream>>>,
+    pub reader: Option<Arc<Mutex<ReadHalf<TcpStream>>>>,
+    pub writer: Option<Arc<Mutex<WriteHalf<TcpStream>>>>,
     pub session: Option<Arc<Mutex<ClientSession>>>,
     // pub tx: mpsc::Sender<Arc<Vec<u8>>>,
 }
@@ -51,7 +52,8 @@ impl RelayHandle {
             active: Arc::new(AtomicBool::new(false)),
             rx: encoder_rx,
             rx_task: None,
-            socket: None,
+            reader: None,
+            writer: None,
             session: None,
         }
     }
@@ -74,21 +76,24 @@ impl RelayHandle {
         // handshake & connect
         let (socket, remaining) = handle_relay_handshake(socket).await?;
         let (socket, session) = self.setup_rtmp_client_session(socket, remaining).await?;
+        let (reader,writer) = split(socket);
 
-        let socket = Arc::new(Mutex::new(socket));
+        let reader = Arc::new(Mutex::new(reader));
+        let writer = Arc::new(Mutex::new(writer));
         let session = Arc::new(Mutex::new(session));
-
-        self.socket = Some(socket.clone());
+        // self.socket = Some(socket.clone());
         self.session = Some(session.clone());
+        self.writer = Some(writer.clone());
+        self.reader = Some(reader.clone());
 
         // feed any leftover handshake bytes into the session
         let mut buf = [0u8; 4096];
 
         loop {
-            let n = socket.lock().await.read(&mut buf).await.unwrap();
-            if n == 0 {
-                return Err("RTMP server closed connection".into());
-            }
+            let n = reader.lock().await.read(&mut buf).await.unwrap();
+            // if n == 0 {
+            //     return Err("RTMP server closed connection".into());
+            // }
             let responses = session.lock().await.handle_input(&buf[..n])?;
             for res in responses {
                 match res {
@@ -99,11 +104,15 @@ impl RelayHandle {
                             eprintln!("⚠️ Relay session event error ({}): {}", self.id, e);
                             let reason = e.to_string();
                             self.handle_relay_failed(app, &reason);
+
                             // or continue, depending on your retry strategy
                         }
                     }
                     ClientSessionResult::OutboundResponse(pkt) => {
-                        socket.lock().await.write_all(&pkt.bytes).await?;
+                        println!("writing Outbound Response");
+                        writer.lock().await.write_all(&pkt.bytes).await?;
+                        println!("DOne writing Outbound Response");
+                        
                     }
                     ClientSessionResult::UnhandleableMessageReceived(payload) => {
                         eprintln!("RTMP Unhandled: {:?}", payload);
@@ -121,7 +130,8 @@ impl RelayHandle {
             }
 
             // 3. Clear socket/session (optional)
-            self.socket = None;
+            self.writer = None;
+            self.reader = None;
             self.session = None;
 
             // 4. Emit frontend event
@@ -140,7 +150,8 @@ impl RelayHandle {
         if let Some(task) = self.rx_task.take() {
             task.abort();
         }
-        self.socket = None;
+        self.writer = None;
+        self.reader = None;
         self.session = None;
 
         let _ = app.emit(AppEvents::RelayFailed.as_str(), self.id);
@@ -190,7 +201,7 @@ impl RelayHandle {
         event: ClientSessionEvent,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let session = self.session.clone().unwrap();
-        let socket = self.socket.clone().unwrap();
+        let writer = self.writer.clone().unwrap();
         match event {
             ClientSessionEvent::ConnectionRequestAccepted => {
                 let r = session.lock().await.request_publishing(
@@ -198,33 +209,26 @@ impl RelayHandle {
                     PublishRequestType::Live,
                 )?;
                 if let ClientSessionResult::OutboundResponse(pkt) = r {
-                    socket.lock().await.write_all(&pkt.bytes).await?;
+                    writer.lock().await.write_all(&pkt.bytes).await?;
                 }
+                println!("Relay:{} connect Request Accepted", self.id);
             }
             ClientSessionEvent::ConnectionRequestRejected { description } => {
                 println!("Connection Failed: {description}");
             }
             ClientSessionEvent::PublishRequestAccepted => {
-                let state = app.state::<Arc<config::AppState>>();
-                let metadata = state.source_metadata.lock().await;
-                if let Some(metadata) = metadata.as_ref() {
-                    let r = session.lock().await.publish_metadata(metadata)?;
-                    if let ClientSessionResult::OutboundResponse(pkt) = r {
-                        socket.lock().await.write_all(&pkt.bytes).await?;
-                    }
-                }
-
+                println!("Relay:{} Publish Request Accepted", self.id);
                 self.start_pump(app).await?;
             }
             ClientSessionEvent::AcknowledgementReceived {
                 bytes_received: _bytes_received,
             } => {
-                // println!("Acknowledgement Received: {_bytes_received}");
+                println!("ACK {_bytes_received}");
             }
             ClientSessionEvent::PingResponseReceived {
                 timestamp: _timestamp,
             } => {
-                println!("Ping Response Received");
+                println!("PING!!");
             }
             ev => {
                 println!("Unknown event {:?}", ev);
@@ -235,12 +239,28 @@ impl RelayHandle {
 
     async fn start_pump(&mut self, app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         let session = self.session.clone().unwrap();
-        let socket = self.socket.clone().unwrap();
+        let writer = self.writer.clone().unwrap();
+        let state = app.state::<Arc<config::AppState>>();
+        let metadata = state.source_metadata.lock().await;
+        let (ping_pkt, _) = session.lock().await.send_ping_request().unwrap();
+
+            writer.lock().await.write_all(&ping_pkt.bytes).await?;
+            println!("Ping Sent");
+        if let Some(metadata) = metadata.as_ref() {
+            println!("Sending Metadata: {:?}",metadata );
+            let r = session.lock().await.publish_metadata(metadata)?;
+            if let ClientSessionResult::OutboundResponse(pkt) = r {
+                writer.lock().await.write_all(&pkt.bytes).await?;
+                println!("Metadata Sent");
+            }
+        }
         let mut rx = self.rx.resubscribe();
         let task = tauri::async_runtime::spawn(async move {
             while let Ok(chunk) = rx.recv().await {
-                if let Some((tag_type, _data_size, timestamp)) = peek_flv_tag(&chunk) {
-                    let data = Bytes::from(chunk);
+                // if let Some((tag_type, timestamp, payload)) = extract_flv_tag_payload(&chunk) {
+                if let Some((tag_type, timestamp, payload)) = extract_flv_tag_payload(&chunk) {
+                    let data = Bytes::from(payload);
+                    
                     let timestamp = RtmpTimestamp::new(timestamp);
                     let resp = match tag_type {
                         FlvTagType::Audio => session
@@ -255,8 +275,11 @@ impl RelayHandle {
                             .unwrap(),
                         _ => continue,
                     };
+                    
                     if let ClientSessionResult::OutboundResponse(pkt) = resp {
-                        let _ = socket.lock().await.write_all(&pkt.bytes).await;
+                        // println!("{:?}", pkt);
+                        let _ = writer.lock().await.write_all(&pkt.bytes).await;
+                        // println!("Data Sent: {:?}", pkt.bytes);
                     }
                 }
             }
