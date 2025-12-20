@@ -92,7 +92,7 @@ pub async fn get_or_init_ports(pool: &SqlitePool) -> Result<PortInfo, Box<dyn st
     }
 
     // Otherwise find available ports
-    let rtmp_port = find_available_port(1580).await?;
+    let rtmp_port = find_available_port(1935).await?;
     let file_port = find_available_port(8787).await?;
 
     sqlx::query("INSERT INTO port_config (rtmp_port, file_port) VALUES (?, ?)")
