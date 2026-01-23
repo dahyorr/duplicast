@@ -1,0 +1,14 @@
+[package]
+name = "duplicast-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+gstreamer = "0.24.4"
+gstreamer-app = "0.24.4"
+gstreamer-sdp = "0.24.4"
+gstreamer-video = "0.24.4"
+gstreamer-webrtc = "0.24.4"
+rml_rtmp = "0.8.0"
+tokio = { version = "1.49.0", features = ["full"]}
