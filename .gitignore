@@ -10,7 +10,7 @@ Cargo.lock
 **/debug/
 **/release/
 **/build/
-# **/target/
+**/target/
 **/deps/
 **/incremental/
 
