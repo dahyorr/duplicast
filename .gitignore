@@ -1,5 +1,4 @@
 # Rust
-**/target/
 **/*.rs.bk
 *.pdb
 
@@ -11,6 +10,7 @@ Cargo.lock
 **/debug/
 **/release/
 **/build/
+# **/target/
 **/deps/
 **/incremental/
 
