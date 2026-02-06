@@ -2,7 +2,7 @@ use anyhow::Context;
 use gstreamer::glib::object::Cast;
 use gstreamer::prelude::{ElementExt, GstBinExt};
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = anyhow::Result<T>;
 
 pub fn setup_gstreamer_pipeline(
     peer_addr: &str,

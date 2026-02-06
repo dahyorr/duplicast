@@ -1,13 +1,18 @@
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
+use uuid::Uuid;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+use crate::state::AppState;
+
+type Result<T> = anyhow::Result<T>;
 
 pub async fn process_rtmp_stream(
     socket: &mut TcpStream,
     appsrc: &gstreamer_app::AppSrc,
     initial_data: Vec<u8>,
     peer_addr: &str,
+    stream_id: Uuid,
+    state: AppState,
 ) -> Result<()> {
     let mut total_bytes = 0;
 
@@ -24,6 +29,7 @@ pub async fn process_rtmp_stream(
             return Err(anyhow::anyhow!("Failed to push initial data to pipeline").into());
         }
         total_bytes += initial_len;
+        state.update_stream_bitrate(stream_id, initial_len as u64).await;
     }
 
     // Main streaming loop
@@ -50,6 +56,9 @@ pub async fn process_rtmp_stream(
 
         total_bytes += bytes_read;
         packets_received += 1;
+
+        // Update bitrate stats
+        state.update_stream_bitrate(stream_id, bytes_read as u64).await;
 
         // Log progress every 100 packets
         if packets_received % 100 == 0 {

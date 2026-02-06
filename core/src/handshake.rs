@@ -2,12 +2,9 @@ use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = anyhow::Result<T>;
 
-pub async fn perform_rtmp_handshake(
-    socket: &mut TcpStream,
-    peer_addr: &str,
-) -> Result<Vec<u8>> {
+pub async fn perform_rtmp_handshake(socket: &mut TcpStream, peer_addr: &str) -> Result<Vec<u8>> {
     println!("🤝 [{}] Starting RTMP handshake...", peer_addr);
 
     let mut handshake = Handshake::new(PeerType::Server);
