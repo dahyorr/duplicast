@@ -1,25 +1,56 @@
-# Duplicast Core
+# Duplicast - RTMP Streaming Server with Management Dashboard
 
-A high-performance RTMP streaming server with built-in management API, relay support, bitrate monitoring, and WebRTC preview capabilities.
+A high-performance RTMP streaming server with web-based management dashboard, built with Rust, GStreamer, and React.
 
 ## Features
 
 - ✅ **RTMP Ingest Server** - Accepts RTMP streams on port 1935
 - ✅ **Management REST API** - HTTP API on port 8080
+- ✅ **Web Dashboard** - React-based UI for managing streams and relays
 - ✅ **Stream Monitoring** - Real-time bitrate and statistics tracking
 - ✅ **Relay Management** - Add, start, stop, and monitor relay endpoints
-- ✅ **WebRTC Preview** - Live preview of streams via WebRTC (planned)
+- ✅ **Robust Logging** - Structured, async-aware logging with tracing
+- 🔄 **WebRTC Preview** - Live preview of streams via WebRTC (coming soon)
 - ✅ **GStreamer Pipeline** - H.264/AAC video/audio processing
 
 ## Quick Start
 
+### Backend
+
 ```bash
+cd core
 cargo run
 ```
 
 This starts:
 - RTMP Server: `rtmp://localhost:1935/live`
-- Management API: `http://localhost:8080`
+- Management API + Dashboard: `http://localhost:8080`
+
+### Frontend (Development)
+
+For development with hot-reload:
+
+```bash
+cd client
+npm install
+npm run dev
+```
+
+This starts the Vite dev server on `http://localhost:5173`
+
+### Frontend (Production)
+
+Build the frontend and serve it from the backend:
+
+```bash
+cd client
+npm install
+npm run build
+cd ../core
+cargo run --release
+```
+
+The dashboard will be available at `http://localhost:8080`
 
 ## Streaming to the Server
 
@@ -33,6 +64,16 @@ Using FFmpeg:
 ```bash
 ffmpeg -re -i input.mp4 -c copy -f flv rtmp://localhost:1935/live/mystream
 ```
+
+## Web Dashboard
+
+Access the dashboard at `http://localhost:8080` to:
+
+- 📊 View real-time statistics (active streams, relays, bitrate)
+- 📹 Monitor active RTMP streams
+- 🔄 Create and manage relay endpoints
+- ▶️ Start/stop relays to forward streams
+- 📈 Track bandwidth usage and performance
 
 ## Management API
 
