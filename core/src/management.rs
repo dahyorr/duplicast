@@ -7,13 +7,15 @@ use axum::{
 };
 use serde_json::json;
 use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::state::AppState;
 use crate::types::{CreateRelayRequest, StartRelayRequest, StreamInfo, WebRTCAnswer, WebRTCOffer};
 
 pub fn create_router(state: AppState) -> Router {
-    Router::new()
+    let api_router = Router::new()
         // Stream endpoints
         .route("/api/streams", get(list_streams))
         .route("/api/streams/{id}", get(get_stream))
@@ -30,14 +32,27 @@ pub fn create_router(state: AppState) -> Router {
         // Health check and stats
         .route("/api/health", get(health_check))
         .route("/api/stats", get(get_stats))
-        .layer(CorsLayer::permissive())
         .with_state(state)
+        .layer(CorsLayer::permissive());
+
+    // Check if client dist folder exists
+    let client_dist = std::path::Path::new("../client/dist");
+    if client_dist.exists() {
+        info!("Serving frontend from ../client/dist");
+        // Serve static files from client/dist with API fallback
+        api_router.fallback_service(ServeDir::new("../client/dist"))
+    } else {
+        warn!("Client dist folder not found. Serving API only.");
+        warn!("Run 'cd client && npm run build' to build the frontend.");
+        api_router
+    }
 }
 
 pub async fn start_management_server(state: AppState, port: u16) -> anyhow::Result<()> {
     let app = create_router(state);
     let addr = format!("0.0.0.0:{}", port);
 
+    info!(port = port, "Management API server starting");
     println!("🌐 Management API started on http://{}", addr);
     println!("   📊 Stats:     GET  http://{}/api/stats", addr);
     println!("   📺 Streams:   GET  http://{}/api/streams", addr);

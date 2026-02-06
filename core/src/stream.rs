@@ -1,11 +1,13 @@
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
+use tracing::{debug, error, info, instrument};
 use uuid::Uuid;
 
 use crate::state::AppState;
 
 type Result<T> = anyhow::Result<T>;
 
+#[instrument(skip(socket, appsrc, initial_data, state), fields(stream_id = %stream_id, client_addr = %peer_addr))]
 pub async fn process_rtmp_stream(
     socket: &mut TcpStream,
     appsrc: &gstreamer_app::AppSrc,
@@ -19,10 +21,7 @@ pub async fn process_rtmp_stream(
     // Push any remaining bytes from the handshake first
     if !initial_data.is_empty() {
         let initial_len = initial_data.len();
-        println!(
-            "📦 [{}] Pushing {} bytes of initial RTMP data",
-            peer_addr, initial_len
-        );
+        debug!(bytes = initial_len, "Pushing initial RTMP data");
 
         let buffer = gstreamer::Buffer::from_slice(initial_data);
         if appsrc.push_buffer(buffer).is_err() {
@@ -31,6 +30,8 @@ pub async fn process_rtmp_stream(
         total_bytes += initial_len;
         state.update_stream_bitrate(stream_id, initial_len as u64).await;
     }
+    
+    info!("Starting stream data processing");
 
     // Main streaming loop
     let mut read_buffer = [0u8; 8192];
@@ -49,8 +50,8 @@ pub async fn process_rtmp_stream(
 
         // Push data to GStreamer pipeline
         let buffer = gstreamer::Buffer::from_slice(read_buffer[..bytes_read].to_vec());
-        if appsrc.push_buffer(buffer).is_err() {
-            println!("⚠️ [{}] Pipeline stopped accepting data", peer_addr);
+        if let Err(e) = appsrc.push_buffer(buffer) {
+            error!(error = ?e, "Pipeline stopped accepting data");
             break;
         }
 
@@ -60,14 +61,21 @@ pub async fn process_rtmp_stream(
         // Update bitrate stats
         state.update_stream_bitrate(stream_id, bytes_read as u64).await;
 
-        // Log progress every 100 packets
-        if packets_received % 100 == 0 {
-            println!(
-                "📈 [{}] Received {} packets ({} bytes)",
-                peer_addr, packets_received, total_bytes
+        // Log progress every 1000 packets
+        if packets_received % 1000 == 0 {
+            debug!(
+                packets_received,
+                mb = total_bytes / 1024 / 1024,
+                "Stream progress"
             );
         }
     }
+
+    info!(
+        packets_received,
+        mb = total_bytes / 1024 / 1024,
+        "Stream processing completed"
+    );
 
     Ok(())
 }
