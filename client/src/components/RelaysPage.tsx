@@ -1,15 +1,8 @@
 import { useState } from 'react';
 import { useRelays, useStreams, useCreateRelay, useDeleteRelay, useStartRelay, useStopRelay } from '../hooks';
 import type { Relay } from '../types';
+import { getRelayStatus } from '@/lib/status-utils';
 
-function getRelayStatus(status: Relay['status']): string {
-  if ('Idle' in status) return 'Idle';
-  if ('Connecting' in status) return 'Connecting';
-  if ('Active' in status) return 'Active';
-  if ('Stopped' in status) return 'Stopped';
-  if ('Error' in status) return `Error: ${status.Error}`;
-  return 'Unknown';
-}
 
 function RelayCard({ relay }: { relay: Relay }) {
   const { data: streams } = useStreams();

@@ -1,12 +1,12 @@
 
-import { useCallback, useMemo } from "react"
+import { useCallback, useMemo, useState, useEffect } from "react"
 import { Activity, ArrowDown, ArrowUp, Radio, Share2, Clock, AlertTriangle, Play, Square, RotateCcw } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useStats, useRelays, useStreams, useStartRelay, useStopRelay } from "@/hooks"
-import { formatBytes, formatUptime, type RelayStatus } from "@/lib/mock-data"
-import type { Relay } from "@/types"
+import { formatBytes, formatUptime } from "@/lib/mock-data"
+import { getRelayStatus } from "@/lib/status-utils"
 import {
   ResponsiveContainer,
   AreaChart,
@@ -33,33 +33,34 @@ function StatusDot({ status }: { status: string }) {
   )
 }
 
-// Helper to convert backend RelayStatus to frontend status string
-function getRelayStatus(relay: Relay): RelayStatus {
-  if ('Active' in relay.status) return 'active';
-  if ('Connecting' in relay.status) return 'connecting';
-  if ('Error' in relay.status) return 'error';
-  return 'inactive';
-}
-
 export function DashboardPage() {
+  const [currentTime, setCurrentTime] = useState(() => Date.now())
   const { data: stats } = useStats();
   const { data: relays = [] } = useRelays();
   const { data: streams = [] } = useStreams();
   const startRelayMutation = useStartRelay();
   const stopRelayMutation = useStopRelay();
 
+  // Update current time every second for uptime display
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now())
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [])
+  // console.log(relays)
   const activeStream = streams[0]; // Get the first active stream
   // const activeRelays = relays.filter((r) => 'Active' in r.status).length;
-  const errorRelays = relays.filter((r) => 'Error' in r.status).length;
+  const errorRelays = relays.filter((r) => r.status === 'Error').length;
+  // const errorRelays = 0;
 
   // Mock bitrate history for now - in a real app, you'd track this over time
   const bitrateHistory = useMemo(() => {
-    const now = Date.now();
     return Array.from({ length: 20 }, (_, i) => ({
-      time: new Date(now - (19 - i) * 5000).toLocaleTimeString(),
-      bitrate: stats?.total_bitrate_mbps || 0,
+      time: new Date(currentTime - (19 - i) * 5000).toLocaleTimeString(),
+      bitrate: (stats?.total_bitrate || 0) / 1000, // Convert bps to kbps
     }));
-  }, [stats?.total_bitrate_mbps]);
+  }, [stats?.total_bitrate, currentTime]);
 
   const startRelay = useCallback((id: string) => {
     if (!activeStream) return;
@@ -73,7 +74,7 @@ export function DashboardPage() {
   const startAll = useCallback(() => {
     if (!activeStream) return;
     for (const relay of relays) {
-      if (!('Active' in relay.status)) {
+      if (relay.status !== 'Active') {
         startRelayMutation.mutate({ id: relay.id, data: { stream_id: activeStream.id } });
       }
     }
@@ -81,7 +82,7 @@ export function DashboardPage() {
 
   const stopAll = useCallback(() => {
     for (const relay of relays) {
-      if ('Active' in relay.status || 'Connecting' in relay.status) {
+      if (relay.status === 'Active' || relay.status === 'Connecting') {
         stopRelayMutation.mutate(relay.id);
       }
     }
@@ -137,7 +138,7 @@ export function DashboardPage() {
               <p className="text-xs font-medium text-muted-foreground">Uptime</p>
               <span className="text-lg font-semibold text-foreground">
                 {activeStream
-                  ? formatUptime(Math.floor((Date.now() - new Date(activeStream.started_at).getTime()) / 1000))
+                  ? formatUptime(Math.floor((currentTime - new Date(activeStream.started_at).getTime()) / 1000))
                   : '0s'}
               </span>
             </div>
@@ -161,7 +162,7 @@ export function DashboardPage() {
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="bg-card border-border lg:col-span-2">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Bitrate (Mbps)</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Bitrate (kbps)</CardTitle>
           </CardHeader>
           <CardContent className="h-64">
             <ResponsiveContainer width="100%" height="100%">
@@ -220,7 +221,7 @@ export function DashboardPage() {
                 <span className="text-xs font-medium text-muted-foreground">Current Bitrate</span>
               </div>
               <p className="text-2xl font-semibold text-foreground">
-                {stats?.total_bitrate_mbps.toFixed(2) || '0.00'} Mbps
+                {Math.round((stats?.total_bitrate || 0) / 1000)} kbps
               </p>
             </CardContent>
           </Card>
@@ -259,7 +260,7 @@ export function DashboardPage() {
               <p className="text-sm text-muted-foreground py-4 text-center">No relays configured</p>
             ) : (
               relays.map((relay) => {
-                const status = getRelayStatus(relay);
+                const status = getRelayStatus(relay.status);
                 return (
                   <div key={relay.id} className="flex items-center justify-between rounded-lg bg-muted/50 px-4 py-3">
                     <div className="flex items-center gap-3">
@@ -332,7 +333,7 @@ export function DashboardPage() {
               <p className="text-sm text-muted-foreground">No recent errors</p>
             ) : (
               relays
-                .filter(r => 'Error' in r.status)
+                .filter(r => r.status === 'Error')
                 .map((relay) => (
                   <div key={relay.id} className="flex flex-col gap-1 rounded-lg bg-destructive/5 px-4 py-3">
                     <div className="flex items-center justify-between">
@@ -344,7 +345,7 @@ export function DashboardPage() {
                       </span>
                     </div>
                     <p className="text-sm text-foreground">
-                      {'Error' in relay.status ? relay.status.Error : 'Unknown error'}
+                      {relay.status === 'Error' ? 'Error' : 'Unknown error'}
                     </p>
                   </div>
                 ))

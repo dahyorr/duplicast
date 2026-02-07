@@ -17,10 +17,7 @@ export interface BitrateStats {
   last_updated: string | null;
 }
 
-export type StreamStatus =
-  | { Active: null }
-  | { Inactive: null }
-  | { Error: string };
+export type StreamStatus = 'Active' | 'Inactive' | 'Error';
 
 export interface Relay {
   id: string;
@@ -35,12 +32,7 @@ export interface Relay {
   enabled: boolean;
 }
 
-export type RelayStatus =
-  | { Idle: null }
-  | { Connecting: null }
-  | { Active: null }
-  | { Stopped: null }
-  | { Error: string };
+export type RelayStatus = 'Idle' | 'Connecting' | 'Active' | 'Stopped' | 'Error';
 
 export interface Stats {
   active_streams: number;

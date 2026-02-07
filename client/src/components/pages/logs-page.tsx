@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { MOCK_LOGS, type LogEntry } from "@/lib/mock-data"
 
 function LogIcon({ level }: { level: LogEntry["level"] }) {
@@ -47,6 +48,13 @@ export function LogsPage() {
         <p className="text-sm text-muted-foreground">System and relay event logs</p>
       </div>
 
+      <Alert>
+        <AlertCircle className="h-4 w-4" />
+        <AlertDescription>
+          Currently showing mock data. Backend logs API endpoint is not yet implemented.
+        </AlertDescription>
+      </Alert>
+
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -64,11 +72,10 @@ export function LogsPage() {
               variant="outline"
               size="sm"
               onClick={() => setFilter(level)}
-              className={`border-border bg-transparent capitalize ${
-                filter === level
+              className={`border-border bg-transparent capitalize ${filter === level
                   ? "bg-accent text-foreground"
                   : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-              }`}
+                }`}
             >
               {level}
             </Button>

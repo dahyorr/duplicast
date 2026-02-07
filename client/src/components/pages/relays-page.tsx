@@ -5,10 +5,9 @@ import {
   Play,
   Power,
   Trash2,
-  Eye,
-  EyeOff,
   Share2,
   ExternalLink,
+  Loader2,
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -16,6 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Dialog,
   DialogContent,
@@ -25,35 +25,12 @@ import {
   DialogFooter,
   DialogDescription,
 } from "@/components/ui/dialog"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  type RelayTarget,
-  type Platform,
-  MOCK_RELAYS,
-  maskKey,
-  formatBytes,
-  formatUptime,
-} from "@/lib/mock-data"
+import { useRelays, useCreateRelay, useDeleteRelay, useStartRelay, useStopRelay, useStreams } from "@/hooks"
+import { toast } from "sonner"
+import type { Relay } from "@/types"
+import {  formatBytes } from "@/lib/mock-data"
+import { getRelayStatus } from "@/lib/status-utils"
 
-function PlatformIcon({ platform }: { platform: Platform }) {
-  const colors: Record<Platform, string> = {
-    youtube: "bg-[hsl(0,72%,51%)] text-[hsl(0,0%,98%)]",
-    twitch: "bg-[hsl(271,76%,53%)] text-[hsl(0,0%,98%)]",
-    kick: "bg-[hsl(142,70%,45%)] text-[hsl(0,0%,2%)]",
-    custom: "bg-muted text-muted-foreground",
-  }
-  return (
-    <Badge className={`${colors[platform]} text-xs font-semibold border-0`}>
-      {platform}
-    </Badge>
-  )
-}
 
 function StatusBadge({ status }: { status: string }) {
   const styles =
@@ -74,54 +51,52 @@ function StatusBadge({ status }: { status: string }) {
 
 function RelayCard({
   relay,
-  onToggle,
+  onStart,
+  onStop,
   onDelete,
+  isStarting,
+  isStopping,
+  isDeleting,
 }: {
-  relay: RelayTarget
-  onToggle: (id: string) => void
+  relay: Relay
+  onStart: (id: string) => void
+  onStop: (id: string) => void
   onDelete: (id: string) => void
+  isStarting: boolean
+  isStopping: boolean
+  isDeleting: boolean
 }) {
-  const [showKey, setShowKey] = useState(false)
+  const statusString = getRelayStatus(relay.status)
+  const isActive = statusString === 'active'
+  const canStart = statusString === 'idle' || statusString === 'stopped'
+  const canStop = statusString === 'active' || statusString === 'connecting'
 
   return (
     <Card className="bg-card border-border">
       <CardContent className="flex flex-col gap-4 p-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <PlatformIcon platform={relay.platform} />
             <h3 className="text-sm font-semibold text-foreground">{relay.name}</h3>
           </div>
-          <StatusBadge status={relay.status} />
+          <StatusBadge status={statusString} />
         </div>
 
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-2">
-            <span className="flex-1 truncate text-xs font-mono text-muted-foreground">{relay.url}</span>
-            <a href={relay.url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground">
+            <span className="flex-1 truncate text-xs font-mono text-muted-foreground">{relay.target_url}</span>
+            <a href={relay.target_url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground">
               <ExternalLink className="h-3.5 w-3.5" />
               <span className="sr-only">Open URL</span>
             </a>
           </div>
-          <div className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-2">
-            <span className="flex-1 truncate text-xs font-mono text-muted-foreground">
-              {showKey ? relay.streamKey : maskKey(relay.streamKey)}
-            </span>
-            <button
-              type="button"
-              onClick={() => setShowKey(!showKey)}
-              className="text-muted-foreground hover:text-foreground"
-              aria-label={showKey ? "Hide stream key" : "Show stream key"}
-            >
-              {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-            </button>
-          </div>
         </div>
 
-        {relay.status === "active" && (
+        {isActive && relay.bytes_sent > 0 && (
           <div className="flex gap-4 text-xs text-muted-foreground">
-            <span>Bitrate: <span className="text-foreground font-medium">{relay.bitrate} kbps</span></span>
-            <span>Uptime: <span className="text-foreground font-medium">{formatUptime(relay.uptime)}</span></span>
-            <span>Sent: <span className="text-foreground font-medium">{formatBytes(relay.bytesOut)}</span></span>
+            <span>Sent: <span className="text-foreground font-medium">{formatBytes(relay.bytes_sent)}</span></span>
+            {relay.started_at && (
+              <span>Started: <span className="text-foreground font-medium">{new Date(relay.started_at).toLocaleTimeString()}</span></span>
+            )}
           </div>
         )}
 
@@ -129,29 +104,47 @@ function RelayCard({
           <div className="flex items-center gap-2">
             <Switch
               checked={relay.enabled}
-              onCheckedChange={() => onToggle(relay.id)}
-              aria-label={`Toggle ${relay.name}`}
+              disabled
+              aria-label={`${relay.name} enabled status`}
             />
             <span className="text-xs text-muted-foreground">{relay.enabled ? "Enabled" : "Disabled"}</span>
           </div>
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 w-8 border-border bg-transparent p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
-              aria-label={`Toggle power for ${relay.name}`}
-              onClick={() => onToggle(relay.id)}
-            >
-              <Power className="h-4 w-4" />
-            </Button>
+            {canStart && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 border-border bg-transparent px-3 text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label={`Start ${relay.name}`}
+                onClick={() => onStart(relay.id)}
+                disabled={isStarting}
+              >
+                {isStarting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                Start
+              </Button>
+            )}
+            {canStop && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 border-border bg-transparent px-3 text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label={`Stop ${relay.name}`}
+                onClick={() => onStop(relay.id)}
+                disabled={isStopping}
+              >
+                {isStopping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Power className="h-3.5 w-3.5" />}
+                Stop
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
               className="h-8 w-8 border-border bg-transparent p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
               aria-label={`Delete ${relay.name}`}
               onClick={() => onDelete(relay.id)}
+              disabled={isDeleting}
             >
-              <Trash2 className="h-4 w-4" />
+              {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
             </Button>
           </div>
         </div>
@@ -161,62 +154,113 @@ function RelayCard({
 }
 
 export function RelaysPage() {
-  const [relays, setRelays] = useState<RelayTarget[]>(MOCK_RELAYS)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [newRelay, setNewRelay] = useState({
     name: "",
-    platform: "youtube" as Platform,
-    url: "",
-    streamKey: "",
+    target_url: "",
   })
+  const [startingRelayId, setStartingRelayId] = useState<string | null>(null)
+  const [stoppingRelayId, setStoppingRelayId] = useState<string | null>(null)
+  const [deletingRelayId, setDeletingRelayId] = useState<string | null>(null)
 
-  const handleToggle = (id: string) => {
-    setRelays((prev) =>
-      prev.map((r) =>
-        r.id === id
-          ? {
-              ...r,
-              enabled: !r.enabled,
-              status: r.enabled ? "inactive" : "connecting",
-            }
-          : r
-      )
-    )
-  }
+  const { data: relays, isLoading } = useRelays()
+  const { data: streams } = useStreams()
+  const createRelay = useCreateRelay()
+  const deleteRelay = useDeleteRelay()
+  const startRelay = useStartRelay()
+  const stopRelay = useStopRelay()
 
-  const handleDelete = (id: string) => {
-    setRelays((prev) => prev.filter((r) => r.id !== id))
-  }
-
-  const handleCreate = () => {
-    const relay: RelayTarget = {
-      id: `relay-${Date.now()}`,
-      name: newRelay.name,
-      platform: newRelay.platform,
-      url: newRelay.url,
-      streamKey: newRelay.streamKey,
-      status: "inactive",
-      enabled: false,
-      bitrate: 0,
-      uptime: 0,
-      bytesOut: 0,
+  const handleStart = async (id: string) => {
+    const activeStream = streams?.[0]
+    if (!activeStream) {
+      toast.error('No active stream', {
+        description: 'Please start streaming before starting a relay',
+      })
+      return
     }
-    setRelays((prev) => [...prev, relay])
-    setDialogOpen(false)
-    setNewRelay({ name: "", platform: "youtube", url: "", streamKey: "" })
+
+    setStartingRelayId(id)
+    try {
+      await startRelay.mutateAsync({
+        id,
+        data: { stream_id: activeStream.id },
+      })
+      toast.success('Relay started successfully')
+    } catch (error) {
+      toast.error('Failed to start relay', {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      })
+    } finally {
+      setStartingRelayId(null)
+    }
   }
 
-  const handleStartAll = () => {
-    setRelays((prev) =>
-      prev.map((r) => ({
-        ...r,
-        enabled: true,
-        status: r.status === "error" ? "connecting" : "active",
-      }))
+  const handleStop = async (id: string) => {
+    setStoppingRelayId(id)
+    try {
+      await stopRelay.mutateAsync(id)
+      toast.success('Relay stopped successfully')
+    } catch (error) {
+      toast.error('Failed to stop relay', {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      })
+    } finally {
+      setStoppingRelayId(null)
+    }
+  }
+
+  const handleDelete = async (id: string) => {
+    setDeletingRelayId(id)
+    try {
+      await deleteRelay.mutateAsync(id)
+      toast.success('Relay deleted successfully')
+    } catch (error) {
+      toast.error('Failed to delete relay', {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      })
+    } finally {
+      setDeletingRelayId(null)
+    }
+  }
+
+  const handleCreate = async () => {
+    if (!newRelay.name || !newRelay.target_url) {
+      toast.error('Please fill in all fields')
+      return
+    }
+
+    try {
+      await createRelay.mutateAsync({
+        name: newRelay.name,
+        target_url: newRelay.target_url,
+      })
+      toast.success('Relay created successfully')
+      setDialogOpen(false)
+      setNewRelay({ name: "", target_url: "" })
+    } catch (error) {
+      toast.error('Failed to create relay', {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      })
+    }
+  }
+
+  const activeCount = relays?.filter((r) => getRelayStatus(r.status) === 'active').length || 0
+  const totalCount = relays?.length || 0
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col gap-6">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Relay Targets</h1>
+          <p className="text-sm text-muted-foreground">Manage your output relay targets</p>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Skeleton className="h-48" />
+          <Skeleton className="h-48" />
+        </div>
+      </div>
     )
   }
-
-  const activeCount = relays.filter((r) => r.status === "active").length
 
   return (
     <div className="flex flex-col gap-6">
@@ -224,7 +268,7 @@ export function RelaysPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Relay Targets</h1>
           <p className="text-sm text-muted-foreground">
-            Manage your output relay targets ({activeCount} of {relays.length} active)
+            Manage your output relay targets ({activeCount} of {totalCount} active)
           </p>
         </div>
         <div className="flex gap-2">
@@ -254,78 +298,48 @@ export function RelaysPage() {
                   />
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="platform" className="text-sm text-foreground">Platform</Label>
-                  <Select
-                    value={newRelay.platform}
-                    onValueChange={(v) => setNewRelay({ ...newRelay, platform: v as Platform })}
-                  >
-                    <SelectTrigger id="platform" className="border-border bg-muted/50 text-foreground">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="border-border bg-card text-foreground">
-                      <SelectItem value="youtube">YouTube</SelectItem>
-                      <SelectItem value="twitch">Twitch</SelectItem>
-                      <SelectItem value="kick">Kick</SelectItem>
-                      <SelectItem value="custom">Custom</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="url" className="text-sm text-foreground">RTMP URL</Label>
+                  <Label htmlFor="url" className="text-sm text-foreground">Target RTMP URL</Label>
                   <Input
                     id="url"
-                    placeholder="rtmp://..."
-                    value={newRelay.url}
-                    onChange={(e) => setNewRelay({ ...newRelay, url: e.target.value })}
+                    placeholder="rtmp://a.rtmp.youtube.com/live2/your-stream-key"
+                    value={newRelay.target_url}
+                    onChange={(e) => setNewRelay({ ...newRelay, target_url: e.target.value })}
                     className="border-border bg-muted/50 font-mono text-sm text-foreground placeholder:text-muted-foreground"
                   />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="streamKey" className="text-sm text-foreground">Stream Key</Label>
-                  <Input
-                    id="streamKey"
-                    type="password"
-                    placeholder="Your stream key"
-                    value={newRelay.streamKey}
-                    onChange={(e) => setNewRelay({ ...newRelay, streamKey: e.target.value })}
-                    className="border-border bg-muted/50 font-mono text-sm text-foreground placeholder:text-muted-foreground"
-                  />
+                  <p className="text-xs text-muted-foreground">Full RTMP URL including stream key</p>
                 </div>
               </div>
               <DialogFooter>
                 <Button
                   onClick={handleCreate}
-                  disabled={!newRelay.name || !newRelay.url || !newRelay.streamKey}
+                  disabled={!newRelay.name || !newRelay.target_url || createRelay.isPending}
                   className="bg-primary text-primary-foreground hover:bg-primary/90"
                 >
+                  {createRelay.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Add Target
                 </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
-          <Button
-            size="sm"
-            className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
-            onClick={handleStartAll}
-          >
-            <Play className="h-4 w-4" />
-            Start All
-          </Button>
         </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        {relays.map((relay) => (
+        {relays?.map((relay) => (
           <RelayCard
             key={relay.id}
             relay={relay}
-            onToggle={handleToggle}
+            onStart={handleStart}
+            onStop={handleStop}
             onDelete={handleDelete}
+            isStarting={startingRelayId === relay.id}
+            isStopping={stoppingRelayId === relay.id}
+            isDeleting={deletingRelayId === relay.id}
           />
         ))}
       </div>
 
-      {relays.length === 0 && (
+      {totalCount === 0 && (
         <Card className="bg-card border-border">
           <CardContent className="flex flex-col items-center gap-3 py-12">
             <Share2 className="h-10 w-10 text-muted-foreground" />

@@ -1,10 +1,14 @@
 
-import { useState } from "react"
-import { Copy, Check, Tv, Gauge, Film, Clock, ArrowDown, RefreshCw } from "lucide-react"
+import { useState, useMemo, useEffect } from "react"
+import { Copy, Check, Tv, Gauge, Film, Clock, ArrowDown, RefreshCw, AlertCircle } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { MOCK_STREAM, formatBytes, formatUptime, BITRATE_HISTORY } from "@/lib/mock-data"
+import { useStreams } from "@/hooks"
+import { formatBytes, formatUptime } from "@/lib/mock-data"
+import { getStreamStatus } from "@/lib/status-utils"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   ResponsiveContainer,
   LineChart,
@@ -27,13 +31,100 @@ function StatusDot({ status }: { status: string }) {
 
 export function StreamPage() {
   const [copied, setCopied] = useState(false)
-  const stream = MOCK_STREAM
+  const [currentTime, setCurrentTime] = useState(() => Date.now())
+  const { data: streams, isLoading, error, refetch } = useStreams()
+
+  // Update current time every second for uptime display
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now())
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Get the first (and likely only) active stream
+  const stream = streams?.[0]
+
+  // Calculate uptime and bitrate history
+  const uptime = useMemo(() => {
+    if (!stream?.started_at) return 0
+    const startTime = new Date(stream.started_at).getTime()
+    return Math.floor((currentTime - startTime) / 1000)
+  }, [stream, currentTime])
+
+  const bitrateHistory = useMemo(() => {
+    const currentBitrate = (stream?.bitrate?.total_bitrate || 0) / 1000 // Convert bps to kbps
+    return Array.from({ length: 20 }, (_, i) => ({
+      time: new Date(Date.now() - (19 - i) * 5000).toLocaleTimeString(),
+      ingest: currentBitrate,
+    }))
+  }, [stream?.bitrate?.total_bitrate])
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(stream.url)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    if (stream) {
+      const streamUrl = `rtmp://localhost:1935/${stream.app_name}/${stream.stream_key}`
+      navigator.clipboard.writeText(streamUrl)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
   }
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col gap-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">Stream</h1>
+            <p className="text-sm text-muted-foreground">Monitor and manage your ingest stream</p>
+          </div>
+        </div>
+        <Skeleton className="h-40 w-full" />
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Skeleton className="h-24" />
+          <Skeleton className="h-24" />
+          <Skeleton className="h-24" />
+          <Skeleton className="h-24" />
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col gap-6">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Stream</h1>
+          <p className="text-sm text-muted-foreground">Monitor and manage your ingest stream</p>
+        </div>
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            Failed to load stream data. {error instanceof Error ? error.message : 'Unknown error'}
+          </AlertDescription>
+        </Alert>
+      </div>
+    )
+  }
+
+  if (!stream) {
+    return (
+      <div className="flex flex-col gap-6">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Stream</h1>
+          <p className="text-sm text-muted-foreground">Monitor and manage your ingest stream</p>
+        </div>
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            No active stream. Start streaming to <code>rtmp://localhost:1935/live</code>
+          </AlertDescription>
+        </Alert>
+      </div>
+    )
+  }
+
+  const statusString = getStreamStatus(stream.status)
+  const streamUrl = `rtmp://localhost:1935/${stream.app_name}/${stream.stream_key}`
 
   return (
     <div className="flex flex-col gap-6">
@@ -42,7 +133,7 @@ export function StreamPage() {
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Stream</h1>
           <p className="text-sm text-muted-foreground">Monitor and manage your ingest stream</p>
         </div>
-        <Button variant="outline" size="sm" className="gap-2 border-border bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground">
+        <Button variant="outline" size="sm" className="gap-2 border-border bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => refetch()}>
           <RefreshCw className="h-4 w-4" />
           Refresh
         </Button>
@@ -55,7 +146,7 @@ export function StreamPage() {
             <div className="flex flex-col gap-2">
               <label className="text-xs font-medium text-muted-foreground">Stream URL</label>
               <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/50 px-4 py-2.5">
-                <code className="flex-1 text-sm font-mono text-foreground">{'$ '}{stream.url}</code>
+                <code className="flex-1 text-sm font-mono text-foreground truncate">{'$ '}{streamUrl}</code>
                 <button
                   type="button"
                   onClick={handleCopy}
@@ -70,25 +161,25 @@ export function StreamPage() {
             <div className="flex items-center gap-3">
               <span className="text-sm text-muted-foreground">Stream Status:</span>
               <div className="flex items-center gap-2">
-                <StatusDot status={stream.status} />
-                <span className="text-sm font-medium capitalize text-foreground">{stream.status}</span>
+                <StatusDot status={statusString} />
+                <span className="text-sm font-medium capitalize text-foreground">{statusString}</span>
               </div>
               <Badge
                 variant="outline"
                 className="ml-auto border-primary/30 bg-primary/10 text-primary"
               >
-                {stream.resolution} @ {stream.fps}fps
+                Live Stream
               </Badge>
             </div>
           </CardContent>
         </Card>
 
         <Card className="bg-card border-border lg:col-span-2 overflow-hidden">
-          <CardContent className="relative flex h-full min-h-[160px] items-center justify-center bg-muted/30 p-0">
+          <CardContent className="relative flex h-full min-h-40 items-center justify-center bg-muted/30 p-0">
             <div className="flex flex-col items-center gap-2 text-muted-foreground">
               <Tv className="h-10 w-10" />
               <span className="text-xs">Stream Preview</span>
-              {stream.status === "active" && (
+              {statusString === "active" && (
                 <span className="flex items-center gap-1.5 text-xs text-primary">
                   <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
                   LIVE
@@ -108,7 +199,11 @@ export function StreamPage() {
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Bitrate</p>
-              <p className="text-lg font-semibold text-foreground">{stream.bitrate} kbps</p>
+              <p className="text-lg font-semibold text-foreground">
+                {stream.bitrate?.total_bitrate
+                  ? `${Math.round(stream.bitrate.total_bitrate / 1000)} kbps`
+                  : '0 kbps'}
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -118,8 +213,8 @@ export function StreamPage() {
               <Film className="h-5 w-5 text-[hsl(199,89%,48%)]" />
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Codec</p>
-              <p className="text-lg font-semibold text-foreground">{stream.codec}</p>
+              <p className="text-xs text-muted-foreground">Publisher</p>
+              <p className="text-lg font-semibold text-foreground truncate">{stream.publisher_addr}</p>
             </div>
           </CardContent>
         </Card>
@@ -130,7 +225,7 @@ export function StreamPage() {
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Uptime</p>
-              <p className="text-lg font-semibold text-foreground">{formatUptime(stream.uptime)}</p>
+              <p className="text-lg font-semibold text-foreground">{formatUptime(uptime)}</p>
             </div>
           </CardContent>
         </Card>
@@ -141,7 +236,7 @@ export function StreamPage() {
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Data Received</p>
-              <p className="text-lg font-semibold text-foreground">{formatBytes(stream.bytesIn)}</p>
+              <p className="text-lg font-semibold text-foreground">{formatBytes(stream.bitrate?.total_bytes || 0)}</p>
             </div>
           </CardContent>
         </Card>
@@ -150,14 +245,14 @@ export function StreamPage() {
       {/* Bitrate chart */}
       <Card className="bg-card border-border">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium text-muted-foreground">Ingest Bitrate History</CardTitle>
+          <CardTitle className="text-sm font-medium text-muted-foreground">Ingest Bitrate History (kbps)</CardTitle>
         </CardHeader>
         <CardContent className="h-72">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={BITRATE_HISTORY}>
+            <LineChart data={bitrateHistory}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(0,0%,12%)" />
               <XAxis dataKey="time" tick={{ fill: "hsl(0,0%,45%)", fontSize: 11 }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fill: "hsl(0,0%,45%)", fontSize: 11 }} tickLine={false} axisLine={false} domain={[5000, 7000]} />
+              <YAxis tick={{ fill: "hsl(0,0%,45%)", fontSize: 11 }} tickLine={false} axisLine={false} />
               <Tooltip
                 contentStyle={{
                   backgroundColor: "hsl(0,0%,6%)",

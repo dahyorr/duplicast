@@ -1,11 +1,12 @@
 
 import { useState } from "react"
-import { Save } from "lucide-react"
+import { Save, AlertCircle } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   Select,
   SelectContent,
@@ -35,11 +36,18 @@ export function SettingsPage() {
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Settings</h1>
           <p className="text-sm text-muted-foreground">Configure your stream multiplexer</p>
         </div>
-        <Button size="sm" className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90">
+        <Button size="sm" className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90" disabled>
           <Save className="h-4 w-4" />
           Save Changes
         </Button>
       </div>
+
+      <Alert>
+        <AlertCircle className="h-4 w-4" />
+        <AlertDescription>
+          Settings management is coming soon. Backend API endpoints for configuration are not yet implemented.
+        </AlertDescription>
+      </Alert>
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Ingest settings */}
