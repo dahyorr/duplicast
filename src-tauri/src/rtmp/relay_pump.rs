@@ -133,6 +133,7 @@ pub fn start_pump_task(
         let start_time = std::time::Instant::now();
         let mut last_log_time = start_time;
         let mut buffered_writer = BufferedRelayWriter::new(writer);
+        let mut flv_parser = FlvTagParser::new();
 
         println!("🚀 Relay {} pump task started", relay_id);
 
@@ -142,58 +143,64 @@ pub fn start_pump_task(
                 chunk = rx.recv() => {
                     match chunk {
                         Ok(data) => {
-                            // Check if this is a sequence header (critical for stream initialization)
-                            let is_video_seq_header = is_video_keyframe_avc_sequence_header(&data);
-                            let is_audio_seq_header = is_audio_aac_sequence_header(&data);
+                            // Feed the incoming chunk to the parser
+                            flv_parser.feed(&data);
 
-                            if is_video_seq_header {
-                                println!("🎬 Relay {} received video sequence header", relay_id);
-                            } else if is_audio_seq_header {
-                                println!("🎵 Relay {} received audio sequence header", relay_id);
-                            }
+                            // Extract all complete FLV tags from the buffered data
+                            while let Some(tag_data) = flv_parser.next_tag() {
+                                // Check if this is a sequence header (critical for stream initialization)
+                                let is_video_seq_header = is_video_keyframe_avc_sequence_header(&tag_data);
+                                let is_audio_seq_header = is_audio_aac_sequence_header(&tag_data);
 
-                            if let Some((tag_type, timestamp, payload)) = extract_flv_tag_payload(&data) {
-                                let payload_bytes = Bytes::from(payload);
-                                let timestamp = RtmpTimestamp::new(timestamp);
-
-                                let resp = match tag_type {
-                                    FlvTagType::Audio => {
-                                        audio_packets += 1;
-                                        session
-                                            .lock()
-                                            .await
-                                            .publish_audio_data(payload_bytes, timestamp, false)
-                                            .ok()
-                                    }
-                                    FlvTagType::Video => {
-                                        video_packets += 1;
-                                        session
-                                            .lock()
-                                            .await
-                                            .publish_video_data(payload_bytes, timestamp, false)
-                                            .ok()
-                                    }
-                                    _ => None,
-                                };
-
-                                if let Some(ClientSessionResult::OutboundResponse(pkt)) = resp {
-                                    let pkt_size = pkt.bytes.len() as u64;
-                                    buffered_writer.push(Bytes::from(pkt.bytes));
-                                    packets_processed += 1;
-                                    bytes_sent += pkt_size;
+                                if is_video_seq_header {
+                                    println!("🎬 Relay {} received video sequence header", relay_id);
+                                } else if is_audio_seq_header {
+                                    println!("🎵 Relay {} received audio sequence header", relay_id);
                                 }
 
-                                // Log stats every 5 seconds
-                                if last_log_time.elapsed() >= std::time::Duration::from_secs(5) {
-                                    let uptime = start_time.elapsed();
-                                    println!(
-                                        "📊 Relay {} stats: uptime={:?}, packets={} (audio={}, video={}), bytes_sent={}, buffer={}",
-                                        relay_id, uptime, packets_processed, audio_packets, video_packets, bytes_sent, buffered_writer.buffer_len()
-                                    );
-                                    last_log_time = std::time::Instant::now();
+                                if let Some((tag_type, timestamp, payload)) = extract_flv_tag_payload(&tag_data) {
+                                    let payload_bytes = Bytes::from(payload);
+                                    let timestamp = RtmpTimestamp::new(timestamp);
+
+                                    let resp = match tag_type {
+                                        FlvTagType::Audio => {
+                                            audio_packets += 1;
+                                            session
+                                                .lock()
+                                                .await
+                                                .publish_audio_data(payload_bytes, timestamp, false)
+                                                .ok()
+                                        }
+                                        FlvTagType::Video => {
+                                            video_packets += 1;
+                                            session
+                                                .lock()
+                                                .await
+                                                .publish_video_data(payload_bytes, timestamp, false)
+                                                .ok()
+                                        }
+                                        _ => None,
+                                    };
+
+                                    if let Some(ClientSessionResult::OutboundResponse(pkt)) = resp {
+                                        let pkt_size = pkt.bytes.len() as u64;
+                                        buffered_writer.push(Bytes::from(pkt.bytes));
+                                        packets_processed += 1;
+                                        bytes_sent += pkt_size;
+                                    }
+
+                                    // Log stats every 5 seconds
+                                    if last_log_time.elapsed() >= std::time::Duration::from_secs(5) {
+                                        let uptime = start_time.elapsed();
+                                        println!(
+                                            "📊 Relay {} stats: uptime={:?}, packets={} (audio={}, video={}), bytes_sent={}, buffer={}",
+                                            relay_id, uptime, packets_processed, audio_packets, video_packets, bytes_sent, buffered_writer.buffer_len()
+                                        );
+                                        last_log_time = std::time::Instant::now();
+                                    }
+                                } else {
+                                    eprintln!("⚠️ Relay {} failed to extract FLV tag payload from {} bytes", relay_id, tag_data.len());
                                 }
-                            } else {
-                                eprintln!("⚠️ Relay {} failed to extract FLV tag payload from {} bytes", relay_id, data.len());
                             }
                         }
                         Err(broadcast::error::RecvError::Lagged(skipped)) => {

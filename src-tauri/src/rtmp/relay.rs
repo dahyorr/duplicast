@@ -157,7 +157,7 @@ impl RelayHandle {
                         if matches!(event, ClientSessionEvent::PublishRequestAccepted) {
                             publish_accepted = true;
                         }
-                        
+
                         if let Err(e) = self.handle_relay_session_event(app, event).await {
                             eprintln!("⚠️ Relay {} session event error: {}", self.id, e);
                             let reason = e.to_string();
@@ -165,7 +165,11 @@ impl RelayHandle {
                         }
                     }
                     ClientSessionResult::OutboundResponse(pkt) => {
-                        println!("📤 Relay {} writing outbound response ({} bytes)", self.id, pkt.bytes.len());
+                        println!(
+                            "📤 Relay {} writing outbound response ({} bytes)",
+                            self.id,
+                            pkt.bytes.len()
+                        );
                         writer.lock().await.write_all(&pkt.bytes).await?;
                     }
                     ClientSessionResult::UnhandleableMessageReceived(payload) => {
