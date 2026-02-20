@@ -190,11 +190,12 @@ impl RelayHandle {
             let responses = session.lock().await.handle_input(&buf[..n])?;
             for res in responses {
                 match res {
-                    ClientSessionResult::RaisedEvent(event) => {                        // Check if publish was accepted to break the loop
+                    ClientSessionResult::RaisedEvent(event) => {
+                        // Check if publish was accepted to break the loop
                         if matches!(event, ClientSessionEvent::PublishRequestAccepted) {
                             publish_accepted = true;
                         }
-                                                // now request connect to “app” (everything after the host in the URL)
+                        // now request connect to “app” (everything after the host in the URL)
                         // self.handle_relay_session_event(app, event).await?;
                         if let Err(e) = self.handle_relay_session_event(app, event).await {
                             eprintln!("⚠️ Relay session event error ({}): {}", self.id, e);
