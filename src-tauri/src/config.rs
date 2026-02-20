@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use bytes::Bytes;
 use get_if_addrs::get_if_addrs;
 use rml_rtmp::sessions::StreamMetadata;
 use serde::Serialize;
@@ -43,10 +44,9 @@ pub struct AppState {
     pub relays: Mutex<HashMap<i64, RelayHandle>>,
     pub encoder_process: Mutex<Option<Child>>,
     pub encoder_stdin: Mutex<Option<ChildStdin>>,
-    pub encoder_sequence_headers: Mutex<Vec<Vec<u8>>>,
+    pub encoder_sequence_headers: Mutex<Vec<Bytes>>,
     pub encoder_settings: Mutex<EncoderSettings>,
-    pub encoder_tx: broadcast::Sender<Vec<u8>>,
-    // pub metadata:
+    pub encoder_tx: broadcast::Sender<Bytes>,
 }
 
 impl AppState {

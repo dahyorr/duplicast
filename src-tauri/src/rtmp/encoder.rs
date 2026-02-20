@@ -2,6 +2,7 @@ use super::utils::{
     flv_header, is_audio_aac_sequence_header, is_video_keyframe_avc_sequence_header,
 };
 
+use bytes::Bytes;
 use crate::config::{self, clear_folder};
 use crate::events::AppEvents;
 use std::{process::Stdio, sync::Arc};
@@ -80,9 +81,9 @@ pub async fn start_encoder(
             match stdout.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
-                    let chunk = buf[..n].to_vec();
-
-                    // Send it to a broadcast channel
+                    let chunk = Bytes::copy_from_slice(&buf[..n]);
+                    
+                    // Send to broadcast channel
                     let _ = encoder_tx.send(chunk.clone());
 
                     // Optionally detect and store headers

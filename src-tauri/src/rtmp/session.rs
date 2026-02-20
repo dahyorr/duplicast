@@ -3,6 +3,7 @@ use super::{
     utils::{flv_tag, FlvTagType},
 };
 
+use bytes::Bytes;
 use crate::{
     config,
     events::AppEvents,
@@ -202,10 +203,11 @@ async fn handle_session_event(
     }
 }
 
-async fn write_to_encoder_stdin(state: &State<'_, Arc<AppState>>, data: &Vec<u8>){
+async fn write_to_encoder_stdin(state: &State<'_, Arc<AppState>>, data: &Vec<u8>) {
+    let data_bytes = Bytes::copy_from_slice(data);
     let mut guard = state.encoder_stdin.lock().await;
     if let Some(stdin) = guard.as_mut() {
-        if let Err(e) = stdin.write_all(data).await {
+        if let Err(e) = stdin.write_all(&data_bytes).await {
             eprintln!("❌ Failed to write to encoder stdin: {}", e);
         }
     }

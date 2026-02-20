@@ -6,8 +6,7 @@ mod models;
 mod rtmp;
 use config::{AppState, StartUpData};
 use models::{EncoderSettings, RelayTargetPublic};
-use rtmp::relay::{start_relays, stop_relays, RelayHandle};
-// use rtmp::stop_encoder;
+use rtmp::relay_supervisor::RelaySupervisorManager;
 use std::sync::Arc;
 use tauri::{async_runtime, AppHandle, Manager};
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -35,57 +34,46 @@ async fn get_startup_data(
 }
 
 #[tauri::command]
-async fn start_all_relays(app: AppHandle) -> Result<(), String> {
-    let _ = start_relays(&app).await;
-    Ok(())
+async fn start_all_relays(
+    supervisor: tauri::State<'_, Arc<RelaySupervisorManager>>,
+    state: tauri::State<'_, Arc<AppState>>,
+    app: AppHandle,
+) -> Result<(), String> {
+    supervisor
+        .start_all_relays(&app, &state)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn stop_all_relays(app: AppHandle) -> Result<(), String> {
-    let _ = stop_relays(&app).await;
+async fn stop_all_relays(
+    supervisor: tauri::State<'_, Arc<RelaySupervisorManager>>,
+    app: AppHandle,
+) -> Result<(), String> {
+    supervisor.stop_all_relays(&app).await;
     Ok(())
 }
 
 #[tauri::command]
 async fn start_relay(
+    supervisor: tauri::State<'_, Arc<RelaySupervisorManager>>,
     state: tauri::State<'_, Arc<AppState>>,
     app: AppHandle,
     id: i64,
 ) -> Result<(), String> {
-    // chk if relay target in state
-    let mut relays = state.relays.lock().await;
-    if let Some(relay) = relays.get_mut(&id) {
-        if relay.active.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err("Relay is already active".to_string());
-        }
-        let _ = relay.start(&app).await;
-        return Ok(());
-    }
-    let pool = db::get_db_pool();
-    let relay_db = db::get_relay_target(id, &pool)
+    supervisor
+        .start_relay(id, &app, &state)
         .await
-        .map_err(|e| e.to_string())?;
-    let mut relay = RelayHandle::from_relay_target(&relay_db, state.encoder_tx.subscribe());
-    let _ = relay.start(&app).await;
-    relays.insert(id, relay);
-    Ok(())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn stop_relay(
-    state: tauri::State<'_, Arc<AppState>>,
+    supervisor: tauri::State<'_, Arc<RelaySupervisorManager>>,
     app: AppHandle,
     id: i64,
 ) -> Result<(), String> {
-    let mut relays = state.relays.lock().await;
-    if let Some(relay) = relays.get_mut(&id) {
-        if relay.active.load(std::sync::atomic::Ordering::SeqCst) {
-            relay.stop(&app).await;
-        } else {
-            return Err("Relay is not active".to_string());
-        }
-    }
-    Ok(())
+    supervisor.stop_relay(id, &app).await
 }
 
 #[tauri::command]
@@ -190,13 +178,11 @@ pub fn run() {
         .setup(|app| {
             let app_handle = app.handle();
             let app_state = Arc::new(AppState::new(0, 0));
-            // Create the log directory if it doesn't exist
-            // let data_dir = app
-            //     .path_resolver()
-            //     .app_data_dir()
-            //     .unwrap_or_else(|| std::env::current_dir().unwrap());
+            let relay_supervisor = Arc::new(RelaySupervisorManager::new());
 
             app.manage(app_state);
+            app.manage(relay_supervisor);
+            
             config::preflight_config(&app_handle);
             let app = app_handle.clone();
             async_runtime::spawn(async move {
