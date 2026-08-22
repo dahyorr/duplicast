@@ -73,11 +73,26 @@ jobs:
         run: |
           brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav
 
+      - name: Cache GStreamer (Windows)
+        if: runner.os == 'Windows'
+        id: gst-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\gstreamer
+          key: gstreamer-windows-1.26.9
+
+      # Only hits the flaky gstreamer.freedesktop.org download server on a
+      # cache miss - once one run succeeds, later runs reuse the cached
+      # install and don't care if that server is down again.
       - name: Install GStreamer (Windows)
+        if: runner.os == 'Windows' && steps.gst-cache.outputs.cache-hit != 'true'
+        run: |
+          choco install gstreamer --version=1.26.9 -y
+          choco install gstreamer-devel --version=1.26.9 -y
+
+      - name: Set GStreamer env vars (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install gstreamer --version=1.24.11 -y
-          choco install gstreamer-devel --version=1.24.11 -y
           echo "PKG_CONFIG_PATH=C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" >> $env:GITHUB_ENV
           echo "C:\gstreamer\1.0\msvc_x86_64\bin" >> $env:GITHUB_PATH
 
