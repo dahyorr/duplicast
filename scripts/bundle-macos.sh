@@ -70,19 +70,21 @@ for name in "${PLUGIN_NAMES[@]}"; do
   fi
 done
 
-echo "==> Fixing up the main binary's dependencies"
-dylibbundler -od -b \
-  -x "$OUT_DIR/duplicast-core" \
+echo "==> Fixing up dependencies for the binary and all plugins (single pass)"
+# IMPORTANT: this must be ONE dylibbundler invocation covering every -x target.
+# Each invocation with -od erases and recreates the whole libs/ dest dir before
+# populating it with only *that invocation's* dependency closure - calling
+# dylibbundler once per file (as this script used to) meant every later call
+# wiped out everything earlier calls had copied, silently dropping any dylib
+# that wasn't a dependency of whichever file happened to be processed last.
+fix_args=(-x "$OUT_DIR/duplicast-core")
+for f in "${plugin_files[@]}"; do
+  fix_args+=(-x "$f")
+done
+dylibbundler -of -b \
+  "${fix_args[@]}" \
   -d "$OUT_DIR/libs" \
   -p "@executable_path/libs/"
-
-echo "==> Fixing up each plugin's dependencies (same shared libs/ destination)"
-for f in "${plugin_files[@]}"; do
-  dylibbundler -od -b \
-    -x "$f" \
-    -d "$OUT_DIR/libs" \
-    -p "@executable_path/libs/"
-done
 
 cat > "$OUT_DIR/duplicast-core.sh" <<'LAUNCHER'
 #!/usr/bin/env bash
