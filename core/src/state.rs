@@ -34,8 +34,6 @@ pub struct StreamPipeline {
     pub pipeline: gstreamer::Pipeline,
     pub videotee: gstreamer::Element,
     pub audiotee: gstreamer::Element,
-    pub video_bytes: Arc<AtomicU64>,
-    pub audio_bytes: Arc<AtomicU64>,
 }
 
 // GStreamer elements owned by one WebRTC viewer session.
@@ -85,6 +83,7 @@ pub struct AppState {
     pub relay_elements: Arc<RwLock<HashMap<Uuid, RelayElements>>>,
     pub webrtc_sessions: Arc<RwLock<HashMap<String, WebRTCSession>>>,
     pub flv_broadcasters: Arc<RwLock<HashMap<Uuid, Arc<FlvBroadcaster>>>>,
+    pub log_tx: tokio::sync::broadcast::Sender<LogEntry>,
     pub config: Arc<RwLock<Config>>,
 }
 
@@ -99,6 +98,7 @@ impl AppState {
             relay_elements: Arc::new(RwLock::new(HashMap::new())),
             webrtc_sessions: Arc::new(RwLock::new(HashMap::new())),
             flv_broadcasters: Arc::new(RwLock::new(HashMap::new())),
+            log_tx: tokio::sync::broadcast::channel(256).0,
             config: Arc::new(RwLock::new(load_config_sync())),
         }
     }
@@ -227,8 +227,6 @@ impl AppState {
                     pipeline: setup.pipeline,
                     videotee: setup.videotee,
                     audiotee: setup.audiotee,
-                    video_bytes: setup.video_bytes,
-                    audio_bytes: setup.audio_bytes,
                 },
             );
         }
@@ -521,7 +519,9 @@ impl AppState {
         if logs.len() >= 1000 {
             logs.remove(0);
         }
-        logs.push(entry);
+        logs.push(entry.clone());
+        drop(logs);
+        let _ = self.log_tx.send(entry);
     }
 
     pub async fn get_logs(&self, limit: Option<usize>) -> Vec<LogEntry> {
@@ -542,6 +542,11 @@ impl Default for AppState {
 // Relay health monitor (async, runs as a spawned task)
 // ---------------------------------------------------------------------------
 
+// async_polls/logged_playing are reset on every reconnect path, including the
+// success path further down - which makes some of those resets provably
+// redundant to the compiler. Harmless defensive resets, not worth restructuring
+// this loop just to avoid the lint.
+#[allow(unused_assignments)]
 async fn monitor_relay(state: AppState, relay_id: Uuid, stream_id: Uuid) {
     let mut reconnect_count = 0u32;
     let mut async_polls = 0u32;   // consecutive polls where rtmpsink was still Async

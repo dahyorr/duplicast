@@ -36,6 +36,7 @@ pub async fn run_rtmp_session(
     let mut buffer = initial_bytes;
     let mut read_buffer = vec![0u8; 65536]; // 64KB buffer
     let mut stream_key = String::new();
+    #[allow(unused_assignments)]
     let mut app_name = String::new();
     let mut media: Option<MediaSink> = None;
 
@@ -62,7 +63,6 @@ pub async fn run_rtmp_session(
                         app_name: app,
                     } => {
                         tracing::debug!(peer_addr, app = %app, "Connection requested");
-                        app_name = app;
                         let responses = session.accept_request(request_id)?;
                         for response in responses {
                             if let ServerSessionResult::OutboundResponse(packet) = response {

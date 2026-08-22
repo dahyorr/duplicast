@@ -1,7 +1,10 @@
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, Request, State},
+    extract::{
+        Path, Request, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+    },
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -49,7 +52,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/logs", get(get_logs))
         .route("/api/config", get(get_config))
         .route("/api/health", get(health_check))
-        .route("/api/stats", get(get_stats));
+        .route("/api/stats", get(get_stats))
+        .route("/api/ws", get(websocket_handler));
 
     // Permissive CORS is only needed for `npm run dev` (Vite on a different port than
     // the API). In release builds the frontend is served same-origin via the ServeDir
@@ -63,8 +67,9 @@ pub fn create_router(state: AppState) -> Router {
     let api_router = protected.merge(public).with_state(state).layer(cors);
 
     // Check if the client dist folder exists (override via DUPLICAST_STATIC_DIR,
-    // otherwise default to the path used by `cargo run` from core/).
-    let client_dist = std::env::var("DUPLICAST_STATIC_DIR").unwrap_or_else(|_| "../client/dist".to_string());
+    // otherwise check next to the executable - matching the layout scripts/build.sh
+    // produces - and fall back to the path used by `cargo run` from core/).
+    let client_dist = resolve_static_dir();
     if std::path::Path::new(&client_dist).exists() {
         info!(dir = %client_dist, "Serving frontend");
         // Serve static files from client/dist with API fallback
@@ -74,6 +79,21 @@ pub fn create_router(state: AppState) -> Router {
         warn!("Run 'cd client && npm run build' to build the frontend, or set DUPLICAST_STATIC_DIR.");
         api_router
     }
+}
+
+fn resolve_static_dir() -> String {
+    if let Ok(dir) = std::env::var("DUPLICAST_STATIC_DIR") {
+        return dir;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("dist");
+            if candidate.exists() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+    "../client/dist".to_string()
 }
 
 async fn require_auth(headers: HeaderMap, request: Request, next: Next) -> Result<Response, StatusCode> {
@@ -112,10 +132,7 @@ async fn health_check() -> impl IntoResponse {
     }))
 }
 
-async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
-    let streams = state.get_all_streams().await;
-    let relays = state.get_all_relays().await;
-
+fn compute_stats(streams: &[crate::types::Stream], relays: &[crate::types::Relay]) -> serde_json::Value {
     let active_streams = streams.len();
     let active_relays = relays
         .iter()
@@ -125,14 +142,20 @@ async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
     let total_bitrate: u64 = streams.iter().map(|s| s.bitrate.total_bitrate).sum();
     let total_bytes: u64 = streams.iter().map(|s| s.bitrate.total_bytes).sum();
 
-    Json(json!({
+    json!({
         "active_streams": active_streams,
         "total_relays": relays.len(),
         "active_relays": active_relays,
         "total_bitrate": total_bitrate,
         "total_bitrate_mbps": total_bitrate as f64 / 1_000_000.0,
         "total_bytes": total_bytes,
-    }))
+    })
+}
+
+async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
+    let streams = state.get_all_streams().await;
+    let relays = state.get_all_relays().await;
+    Json(compute_stats(&streams, &relays))
 }
 
 async fn list_streams(State(state): State<AppState>) -> impl IntoResponse {
@@ -414,6 +437,76 @@ async fn stream_flv(
         .header(header::CACHE_CONTROL, "no-cache")
         .body(body)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// Single push connection replacing the old per-resource polling
+/// (`/api/stats`, `/api/streams`, `/api/relays`, `/api/logs` on a timer). Sends a
+/// combined stats/streams/relays snapshot on an interval, plus new log entries as
+/// they're created (real push, not polled) via `AppState::log_tx`. The REST
+/// endpoints stay in place for the initial page load and as a fallback.
+async fn websocket_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
+    ws.on_upgrade(|socket| handle_socket(socket, state))
+}
+
+fn ws_message<T: serde::Serialize>(msg_type: &str, payload: &T) -> Option<Message> {
+    serde_json::to_string(&json!({ "type": msg_type, "payload": payload }))
+        .ok()
+        .map(|s| Message::Text(s.into()))
+}
+
+async fn handle_socket(mut socket: WebSocket, state: AppState) {
+    let mut log_rx = state.log_tx.subscribe();
+
+    let initial_logs = state.get_logs(Some(100)).await;
+    if let Some(msg) = ws_message("logs_init", &initial_logs) {
+        if socket.send(msg).await.is_err() {
+            return;
+        }
+    }
+
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                let streams = state.get_all_streams().await;
+                let relays = state.get_all_relays().await;
+                let snapshot = json!({
+                    "stats": compute_stats(&streams, &relays),
+                    "streams": streams,
+                    "relays": relays,
+                });
+                match ws_message("snapshot", &snapshot) {
+                    Some(msg) => {
+                        if socket.send(msg).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => continue,
+                }
+            }
+            log = log_rx.recv() => {
+                match log {
+                    Ok(entry) => {
+                        if let Some(msg) = ws_message("log", &entry) {
+                            if socket.send(msg).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            incoming = socket.recv() => {
+                match incoming {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Err(_)) => break,
+                    _ => {} // ignore pings/pongs/anything the client sends
+                }
+            }
+        }
+    }
 }
 
 async fn get_logs(State(state): State<AppState>) -> impl IntoResponse {

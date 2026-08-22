@@ -1,14 +1,20 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
-import { DashboardPage } from "@/components/pages/dashboard-page";
-import { StreamPage } from "@/components/pages/stream-page";
-import { RelaysPage } from "@/components/pages/relays-page";
-import { LogsPage } from "@/components/pages/logs-page";
-import { SettingsPage } from "@/components/pages/settings-page";
 import { Toaster } from "@/components/ui/sonner";
+import { useLiveSocket } from "@/lib/live-socket";
 import "./index.css";
+
+const DashboardPage = lazy(() => import("@/components/pages/dashboard-page").then((m) => ({ default: m.DashboardPage })));
+const StreamPage = lazy(() => import("@/components/pages/stream-page").then((m) => ({ default: m.StreamPage })));
+const RelaysPage = lazy(() => import("@/components/pages/relays-page").then((m) => ({ default: m.RelaysPage })));
+const LogsPage = lazy(() => import("@/components/pages/logs-page").then((m) => ({ default: m.LogsPage })));
+const SettingsPage = lazy(() => import("@/components/pages/settings-page").then((m) => ({ default: m.SettingsPage })));
+
+// Devtools are dev-only and shouldn't ship in the production bundle at all.
+const ReactQueryDevtools = import.meta.env.PROD
+  ? () => null
+  : lazy(() => import("@tanstack/react-query-devtools").then((m) => ({ default: m.ReactQueryDevtools })));
 
 const queryClient = new QueryClient();
 
@@ -21,6 +27,8 @@ const pages: Record<string, React.ComponentType> = {
 };
 
 function AppContent() {
+  useLiveSocket();
+
   const [currentPage, setCurrentPage] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     return params.get('page') || 'dashboard';
@@ -50,7 +58,9 @@ function AppContent() {
     <div className="flex h-screen overflow-hidden bg-background text-foreground">
       <AppSidebar currentPage={currentPage} onNavigate={handleNavigate} />
       <main className="flex-1 overflow-y-auto p-6 lg:p-8">
-        <ActivePage />
+        <Suspense fallback={null}>
+          <ActivePage />
+        </Suspense>
       </main>
     </div>
   );
@@ -61,7 +71,9 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <AppContent />
       <Toaster />
-      <ReactQueryDevtools initialIsOpen={false} />
+      <Suspense fallback={null}>
+        <ReactQueryDevtools initialIsOpen={false} />
+      </Suspense>
     </QueryClientProvider>
   );
 }

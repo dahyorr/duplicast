@@ -6,7 +6,7 @@ import { Play, Pause, Maximize2, Volume2, VolumeX, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { sendWebRTCOffer, sendWebRTCHangup, getFlvUrl } from "@/api"
 import { useConfig } from "@/hooks"
-import flvjs from "flv.js"
+import type { FlvPlayer } from "flv.js"
 
 interface StreamPreviewProps {
   streamUrl?: string
@@ -30,43 +30,51 @@ export function StreamPreview({ streamUrl, streamId, className, autoPlay = false
   // decoded via Media Source Extensions, no ICE/DTLS/codec negotiation.
   useEffect(() => {
     if (mode !== "flv" || !streamUrl || !streamId || !videoRef.current || !isPlaying) return
-    if (!flvjs.isSupported()) {
-      setError("HTTP-FLV playback isn't supported in this browser")
-      return
-    }
 
     let cancelled = false
+    let player: FlvPlayer | null = null
+    const video = videoRef.current
+    const onCanPlay = () => { if (!cancelled) setIsLoading(false) }
+
     setIsLoading(true)
     setError(null)
 
-    const player = flvjs.createPlayer({ type: "flv", url: getFlvUrl(streamId), isLive: true })
-    player.attachMediaElement(videoRef.current)
-
-    player.on(flvjs.Events.ERROR, (...args: unknown[]) => {
+    // Loaded on demand - most previews use FLV, but no reason to ship it in the
+    // main bundle when the WebRTC-only path doesn't need it at all.
+    import("flv.js").then(({ default: flvjs }) => {
       if (cancelled) return
-      console.error("flv.js error:", ...args)
-      setError("Playback error")
-      setIsLoading(false)
-    })
+      if (!flvjs.isSupported()) {
+        setError("HTTP-FLV playback isn't supported in this browser")
+        return
+      }
 
-    const video = videoRef.current
-    const onCanPlay = () => { if (!cancelled) setIsLoading(false) }
-    video.addEventListener("canplay", onCanPlay)
+      player = flvjs.createPlayer({ type: "flv", url: getFlvUrl(streamId), isLive: true })
+      player.attachMediaElement(video)
 
-    player.load()
-    player.play().catch((err) => {
-      if (cancelled) return
-      console.error("Play failed:", err)
-      setIsPlaying(false)
+      player.on(flvjs.Events.ERROR, (...args: unknown[]) => {
+        if (cancelled) return
+        console.error("flv.js error:", ...args)
+        setError("Playback error")
+        setIsLoading(false)
+      })
+
+      video.addEventListener("canplay", onCanPlay)
+
+      player.load()
+      player.play().catch((err) => {
+        if (cancelled) return
+        console.error("Play failed:", err)
+        setIsPlaying(false)
+      })
     })
 
     return () => {
       cancelled = true
       video.removeEventListener("canplay", onCanPlay)
-      player.pause()
-      player.unload()
-      player.detachMediaElement()
-      player.destroy()
+      player?.pause()
+      player?.unload()
+      player?.detachMediaElement()
+      player?.destroy()
     }
   }, [mode, streamUrl, streamId, isPlaying])
 

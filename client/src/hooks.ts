@@ -2,6 +2,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as api from './api';
 import type { Config, CreateRelayRequest, StartRelayRequest } from './types';
 
+// Streams, stats, and relays are kept fresh in real time by the WebSocket
+// connection (see lib/live-socket.ts), which pushes straight into these same
+// query keys. The queryFn here only matters for the very first load (before the
+// socket connects) and the refetchInterval is just a fallback safety net in case
+// the socket is ever down for an extended period - not the primary update path.
+const LIVE_DATA_FALLBACK_INTERVAL = 30_000;
+
 // Streams
 export const useStreams = () => {
   return useQuery({
@@ -10,7 +17,7 @@ export const useStreams = () => {
       const { data } = await api.getStreams();
       return data;
     },
-    refetchInterval: 2000, // Refresh every 2 seconds
+    refetchInterval: LIVE_DATA_FALLBACK_INTERVAL,
   });
 };
 
@@ -21,7 +28,7 @@ export const useStream = (id: string) => {
       const { data } = await api.getStream(id);
       return data;
     },
-    refetchInterval: 2000,
+    refetchInterval: LIVE_DATA_FALLBACK_INTERVAL,
   });
 };
 
@@ -32,7 +39,7 @@ export const useStreamInfo = (id: string) => {
       const { data } = await api.getStreamInfo(id);
       return data;
     },
-    refetchInterval: 2000,
+    refetchInterval: LIVE_DATA_FALLBACK_INTERVAL,
   });
 };
 
@@ -44,7 +51,7 @@ export const useStats = () => {
       const { data } = await api.getStats();
       return data;
     },
-    refetchInterval: 1000, // Refresh every second for stats
+    refetchInterval: LIVE_DATA_FALLBACK_INTERVAL,
   });
 };
 
@@ -56,7 +63,7 @@ export const useRelays = () => {
       const { data } = await api.getRelays();
       return data;
     },
-    refetchInterval: 2000,
+    refetchInterval: LIVE_DATA_FALLBACK_INTERVAL,
   });
 };
 
@@ -106,7 +113,9 @@ export const useStopRelay = () => {
   });
 };
 
-// Logs
+// Logs - real-time pushed over the WebSocket as they're created (see
+// lib/live-socket.ts); the fallback interval here only matters if the socket
+// is down.
 export const useLogs = () => {
   return useQuery({
     queryKey: ['logs'],
@@ -114,7 +123,7 @@ export const useLogs = () => {
       const { data } = await api.getLogs();
       return data;
     },
-    refetchInterval: 5000,
+    refetchInterval: LIVE_DATA_FALLBACK_INTERVAL,
   });
 };
 
