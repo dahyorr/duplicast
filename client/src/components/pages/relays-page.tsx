@@ -81,14 +81,20 @@ function RelayCard({
           <StatusBadge status={statusString} />
         </div>
 
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-2">
-            <span className="flex-1 truncate text-xs font-mono text-muted-foreground">{relay.target_url}</span>
-            <a href={relay.target_url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground">
+            <span className="flex-1 truncate text-xs font-mono text-muted-foreground">{relay.rtmp_url}</span>
+            <a href={relay.rtmp_url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground">
               <ExternalLink className="h-3.5 w-3.5" />
               <span className="sr-only">Open URL</span>
             </a>
           </div>
+          {relay.stream_key && (
+            <div className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-1.5">
+              <span className="text-xs text-muted-foreground">Stream key:</span>
+              <span className="text-xs font-mono text-muted-foreground">****</span>
+            </div>
+          )}
         </div>
 
         {isActive && relay.bytes_sent > 0 && (
@@ -157,7 +163,8 @@ export function RelaysPage() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [newRelay, setNewRelay] = useState({
     name: "",
-    target_url: "",
+    rtmp_url: "",
+    stream_key: "",
   })
   const [startingRelayId, setStartingRelayId] = useState<string | null>(null)
   const [stoppingRelayId, setStoppingRelayId] = useState<string | null>(null)
@@ -224,19 +231,20 @@ export function RelaysPage() {
   }
 
   const handleCreate = async () => {
-    if (!newRelay.name || !newRelay.target_url) {
-      toast.error('Please fill in all fields')
+    if (!newRelay.name || !newRelay.rtmp_url) {
+      toast.error('Please fill in all required fields')
       return
     }
 
     try {
       await createRelay.mutateAsync({
         name: newRelay.name,
-        target_url: newRelay.target_url,
+        rtmp_url: newRelay.rtmp_url,
+        stream_key: newRelay.stream_key,
       })
       toast.success('Relay created successfully')
       setDialogOpen(false)
-      setNewRelay({ name: "", target_url: "" })
+      setNewRelay({ name: "", rtmp_url: "", stream_key: "" })
     } catch (error) {
       toast.error('Failed to create relay', {
         description: error instanceof Error ? error.message : 'Unknown error',
@@ -291,28 +299,43 @@ export function RelaysPage() {
                   <Label htmlFor="name" className="text-sm text-foreground">Name</Label>
                   <Input
                     id="name"
-                    placeholder="My Stream Relay"
+                    placeholder="YouTube Live"
                     value={newRelay.name}
                     onChange={(e) => setNewRelay({ ...newRelay, name: e.target.value })}
                     className="border-border bg-muted/50 text-foreground placeholder:text-muted-foreground"
                   />
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="url" className="text-sm text-foreground">Target RTMP URL</Label>
+                  <Label htmlFor="rtmp-url" className="text-sm text-foreground">RTMP Server URL</Label>
                   <Input
-                    id="url"
-                    placeholder="rtmp://a.rtmp.youtube.com/live2/your-stream-key"
-                    value={newRelay.target_url}
-                    onChange={(e) => setNewRelay({ ...newRelay, target_url: e.target.value })}
+                    id="rtmp-url"
+                    placeholder="rtmp://a.rtmp.youtube.com/live2"
+                    value={newRelay.rtmp_url}
+                    onChange={(e) => setNewRelay({ ...newRelay, rtmp_url: e.target.value })}
                     className="border-border bg-muted/50 font-mono text-sm text-foreground placeholder:text-muted-foreground"
                   />
-                  <p className="text-xs text-muted-foreground">Full RTMP URL including stream key</p>
+                  <p className="text-xs text-muted-foreground">RTMP ingest URL without the stream key</p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="stream-key" className="text-sm text-foreground">
+                    Stream Key <span className="text-muted-foreground font-normal">(optional)</span>
+                  </Label>
+                  <Input
+                    id="stream-key"
+                    type="password"
+                    placeholder="xxxx-xxxx-xxxx-xxxx"
+                    value={newRelay.stream_key}
+                    onChange={(e) => setNewRelay({ ...newRelay, stream_key: e.target.value })}
+                    className="border-border bg-muted/50 font-mono text-sm text-foreground placeholder:text-muted-foreground"
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-muted-foreground">Stored securely, never shown again</p>
                 </div>
               </div>
               <DialogFooter>
                 <Button
                   onClick={handleCreate}
-                  disabled={!newRelay.name || !newRelay.target_url || createRelay.isPending}
+                  disabled={!newRelay.name || !newRelay.rtmp_url || createRelay.isPending}
                   className="bg-primary text-primary-foreground hover:bg-primary/90"
                 >
                   {createRelay.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

@@ -5,8 +5,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useStats, useRelays, useStreams, useStartRelay, useStopRelay } from "@/hooks"
-import { formatBytes, formatUptime } from "@/lib/mock-data"
+import { formatBytes, formatUptime, formatBitrate } from "@/lib/mock-data"
 import { getRelayStatus } from "@/lib/status-utils"
+import { StreamPreview } from "@/components/StreamPreview"
 import {
   ResponsiveContainer,
   AreaChart,
@@ -58,7 +59,7 @@ export function DashboardPage() {
   const bitrateHistory = useMemo(() => {
     return Array.from({ length: 20 }, (_, i) => ({
       time: new Date(currentTime - (19 - i) * 5000).toLocaleTimeString(),
-      bitrate: (stats?.total_bitrate || 0) / 1000, // Convert bps to kbps
+      bitrate: Number.parseFloat(((stats?.total_bitrate || 0) / 1_000_000).toFixed(2)), // Convert bps to Mbps
     }));
   }, [stats?.total_bitrate, currentTime]);
 
@@ -158,6 +159,15 @@ export function DashboardPage() {
         </Card>
       </div>
 
+      {/* Stream Preview */}
+      {activeStream && (
+        <StreamPreview
+          streamUrl={`rtmp://localhost:1935/${activeStream.app_name}/${activeStream.stream_key}`}
+          streamId={activeStream.id}
+          autoPlay={false}
+        />
+      )}
+
       {/* Bitrate chart + Transfer stats */}
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="bg-card border-border lg:col-span-2">
@@ -221,7 +231,7 @@ export function DashboardPage() {
                 <span className="text-xs font-medium text-muted-foreground">Current Bitrate</span>
               </div>
               <p className="text-2xl font-semibold text-foreground">
-                {Math.round((stats?.total_bitrate || 0) / 1000)} kbps
+                {formatBitrate(stats?.total_bitrate || 0)}
               </p>
             </CardContent>
           </Card>

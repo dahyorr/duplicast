@@ -22,7 +22,8 @@ export type StreamStatus = 'Active' | 'Inactive' | 'Error';
 export interface Relay {
   id: string;
   name: string;
-  target_url: string;
+  rtmp_url: string;
+  stream_key: string; // always "****" or "" from the API
   stream_id: string | null;
   status: RelayStatus;
   created_at: string;
@@ -50,9 +51,47 @@ export interface StreamInfo {
 
 export interface CreateRelayRequest {
   name: string;
-  target_url: string;
+  rtmp_url: string;
+  stream_key: string;
 }
 
 export interface StartRelayRequest {
   stream_id: string;
+}
+
+export interface WebRTCOffer {
+  sdp: string;
+  type: string;
+}
+
+export interface WebRTCAnswer {
+  sdp: string;
+  type: string;
+}
+
+export interface IceCandidate {
+  candidate: string;
+  sdpMLineIndex?: number;
+  sdpMid?: string;
+}
+
+export interface LogEntry {
+  id: string;
+  timestamp: string;
+  level: 'Info' | 'Warn' | 'Error';
+  message: string;
+  source: string;
+}
+
+export interface Config {
+  listen_addr: string;
+  rtmp_port: number;
+  max_bitrate_kbps: number;
+  relay_auto_reconnect: boolean;
+  relay_reconnect_delay_secs: number;
+  relay_reconnect_attempts: number;
+  log_level: string;
+  health_check_interval_secs: number;
+  api_enabled: boolean;
+  api_port: number;
 }

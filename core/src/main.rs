@@ -10,6 +10,8 @@ mod types;
 use state::AppState;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use types::{LogEntry, LogLevel};
+use uuid::Uuid;
 
 type Result<T> = anyhow::Result<T>;
 
@@ -33,6 +35,23 @@ async fn main() -> Result<()> {
     // Create shared state
     let state = AppState::new();
     info!("Application state initialized");
+
+    // Add startup log entries
+    state.add_log(LogEntry {
+        id: Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        level: LogLevel::Info,
+        message: "Duplicast server starting up".to_string(),
+        source: "system".to_string(),
+    }).await;
+
+    state.add_log(LogEntry {
+        id: Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        level: LogLevel::Info,
+        message: "GStreamer initialized successfully".to_string(),
+        source: "gstreamer".to_string(),
+    }).await;
 
     // Server configuration
     let rtmp_port = 1935;

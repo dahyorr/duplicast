@@ -1,5 +1,17 @@
 import axios from 'axios';
-import type { Stream, Relay, Stats, CreateRelayRequest, StartRelayRequest, StreamInfo } from './types';
+import type {
+  Stream,
+  Relay,
+  Stats,
+  CreateRelayRequest,
+  StartRelayRequest,
+  StreamInfo,
+  WebRTCOffer,
+  WebRTCAnswer,
+  IceCandidate,
+  LogEntry,
+  Config,
+} from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 
@@ -27,5 +39,18 @@ export const deleteRelay = (id: string) => api.delete(`/api/relays/${id}`);
 export const startRelay = (id: string, data: StartRelayRequest) =>
   api.post<Relay>(`/api/relays/${id}/start`, data);
 export const stopRelay = (id: string) => api.post<Relay>(`/api/relays/${id}/stop`);
+
+// WebRTC
+export const sendWebRTCOffer = (streamId: string, offer: WebRTCOffer) =>
+  api.post<WebRTCAnswer>(`/api/streams/${streamId}/webrtc/offer`, offer);
+export const sendIceCandidate = (streamId: string, candidate: IceCandidate) =>
+  api.post(`/api/streams/${streamId}/webrtc/ice`, candidate);
+
+// Logs
+export const getLogs = () => api.get<LogEntry[]>('/api/logs');
+
+// Config
+export const getConfig = () => api.get<Config>('/api/config');
+export const saveConfig = (config: Config) => api.put<Config>('/api/config', config);
 
 export default api;

@@ -1,14 +1,15 @@
 
 import { useState, useMemo, useEffect } from "react"
-import { Copy, Check, Tv, Gauge, Film, Clock, ArrowDown, RefreshCw, AlertCircle } from "lucide-react"
+import { Copy, Check, Gauge, Film, Clock, ArrowDown, RefreshCw, AlertCircle } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useStreams } from "@/hooks"
-import { formatBytes, formatUptime } from "@/lib/mock-data"
+import { formatBytes, formatUptime, formatBitrate } from "@/lib/mock-data"
 import { getStreamStatus } from "@/lib/status-utils"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
+import { StreamPreview } from "@/components/StreamPreview"
 import {
   ResponsiveContainer,
   LineChart,
@@ -53,10 +54,10 @@ export function StreamPage() {
   }, [stream, currentTime])
 
   const bitrateHistory = useMemo(() => {
-    const currentBitrate = (stream?.bitrate?.total_bitrate || 0) / 1000 // Convert bps to kbps
+    const currentBitrate = (stream?.bitrate?.total_bitrate || 0) / 1_000_000 // Convert bps to Mbps
     return Array.from({ length: 20 }, (_, i) => ({
       time: new Date(Date.now() - (19 - i) * 5000).toLocaleTimeString(),
-      ingest: currentBitrate,
+      ingest: Number.parseFloat(currentBitrate.toFixed(2)),
     }))
   }, [stream?.bitrate?.total_bitrate])
 
@@ -174,20 +175,12 @@ export function StreamPage() {
           </CardContent>
         </Card>
 
-        <Card className="bg-card border-border lg:col-span-2 overflow-hidden">
-          <CardContent className="relative flex h-full min-h-40 items-center justify-center bg-muted/30 p-0">
-            <div className="flex flex-col items-center gap-2 text-muted-foreground">
-              <Tv className="h-10 w-10" />
-              <span className="text-xs">Stream Preview</span>
-              {statusString === "active" && (
-                <span className="flex items-center gap-1.5 text-xs text-primary">
-                  <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
-                  LIVE
-                </span>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+        <StreamPreview
+          streamUrl={statusString === "active" ? streamUrl : undefined}
+          streamId={stream.id}
+          className="lg:col-span-2"
+          autoPlay={false}
+        />
       </div>
 
       {/* Stream details */}
@@ -200,9 +193,7 @@ export function StreamPage() {
             <div>
               <p className="text-xs text-muted-foreground">Bitrate</p>
               <p className="text-lg font-semibold text-foreground">
-                {stream.bitrate?.total_bitrate
-                  ? `${Math.round(stream.bitrate.total_bitrate / 1000)} kbps`
-                  : '0 kbps'}
+                {formatBitrate(stream.bitrate?.total_bitrate || 0)}
               </p>
             </div>
           </CardContent>

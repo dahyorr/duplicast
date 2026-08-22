@@ -3,7 +3,6 @@ use rml_rtmp::sessions::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-// use tracing::{debug, info, instrument};
 
 type Result<T> = anyhow::Result<T>;
 
@@ -12,12 +11,12 @@ pub async fn handle_rtmp_session(
     initial_bytes: Vec<u8>,
     peer_addr: &str,
 ) -> Result<(Vec<u8>, String, String)> {
-    println!("📡 [{}] Handling RTMP session messages...", peer_addr);
+    tracing::debug!(peer_addr, "Handling RTMP session messages");
 
     let config = ServerSessionConfig::new();
     let (mut session, initial_results) = ServerSession::new(config)?;
     let mut buffer = initial_bytes;
-    let mut read_buffer = vec![0u8; 8192];
+    let mut read_buffer = vec![0u8; 65536]; // 64KB buffer
     let mut stream_key = String::new();
     let mut app_name = String::new();
 
@@ -47,10 +46,7 @@ pub async fn handle_rtmp_session(
                             request_id,
                             app_name: app,
                         } => {
-                            println!(
-                                "   [{}] Connection requested to app: {}",
-                                peer_addr, app
-                            );
+                            tracing::debug!(peer_addr, app = %app, "Connection requested");
                             app_name = app;
                             // Accept any connection request
                             let responses = session.accept_request(request_id)?;
@@ -66,7 +62,7 @@ pub async fn handle_rtmp_session(
                             app_name: app,
                             stream_key: key,
                         } => {
-                            println!("   [{}] Release stream: {}/{}", peer_addr, app, key);
+                            tracing::debug!(peer_addr, app = %app, key = %key, "Release stream");
                             stream_key = key;
                             let responses = session.accept_request(request_id)?;
                             for response in responses {
@@ -82,9 +78,9 @@ pub async fn handle_rtmp_session(
                             stream_key: key,
                             mode,
                         } => {
-                            println!(
-                                "   [{}] Publish requested: {}/{} (mode: {:?})",
-                                peer_addr, app, key, mode
+                            tracing::info!(
+                                peer_addr, app = %app, key = %key, ?mode,
+                                "Publish stream requested"
                             );
 
                             app_name = app;
@@ -99,8 +95,7 @@ pub async fn handle_rtmp_session(
                                 }
                             }
 
-                            println!("✅ [{}] Stream key accepted: {}", peer_addr, key);
-                            println!("🎬 [{}] Starting media transmission...", peer_addr);
+                            tracing::info!(peer_addr, key = %key, "Stream key accepted, starting media transmission");
 
                             // Return empty buffer with stream info
                             return Ok((Vec::new(), stream_key, app_name));
@@ -110,10 +105,7 @@ pub async fn handle_rtmp_session(
                             stream_key,
                             metadata,
                         } => {
-                            println!(
-                                "   [{}] Metadata for {}/{}: {:?}",
-                                peer_addr, app_name, stream_key, metadata
-                            );
+                            tracing::debug!(app_name = %app_name, stream_key = %stream_key, ?metadata, "Stream metadata changed");
                         }
                         ServerSessionEvent::VideoDataReceived {
                             app_name: _,
@@ -121,8 +113,7 @@ pub async fn handle_rtmp_session(
                             data,
                             timestamp: _,
                         } => {
-                            // Video data received - return it to be processed by GStreamer
-                            println!("📹 [{}] First video packet received", peer_addr);
+                            tracing::debug!("First video packet received");
                             return Ok((data.to_vec(), stream_key, app_name));
                         }
                         ServerSessionEvent::AudioDataReceived {
@@ -131,12 +122,11 @@ pub async fn handle_rtmp_session(
                             data,
                             timestamp: _,
                         } => {
-                            // Audio data received - return it to be processed by GStreamer
-                            println!("🔊 [{}] First audio packet received", peer_addr);
+                            tracing::debug!("First audio packet received");
                             return Ok((data.to_vec(), stream_key, app_name));
                         }
                         _ => {
-                            println!("   [{}] Other event: {:?}", peer_addr, event);
+                            tracing::debug!(?event, "Other RTMP event");
                         }
                     }
                 }

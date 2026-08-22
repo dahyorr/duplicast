@@ -1,38 +1,63 @@
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Search, Filter, AlertTriangle, Info, AlertCircle } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { MOCK_LOGS, type LogEntry } from "@/lib/mock-data"
+import { getLogs } from "@/api"
+import type { LogEntry } from "@/types"
 
-function LogIcon({ level }: { level: LogEntry["level"] }) {
-  if (level === "error") return <AlertCircle className="h-4 w-4 text-destructive" />
-  if (level === "warn") return <AlertTriangle className="h-4 w-4 text-[hsl(35,92%,55%)]" />
+function LogIcon({ level }: { level: string }) {
+  if (level === "Error") return <AlertCircle className="h-4 w-4 text-destructive" />
+  if (level === "Warn") return <AlertTriangle className="h-4 w-4 text-[hsl(35,92%,55%)]" />
   return <Info className="h-4 w-4 text-[hsl(199,89%,48%)]" />
 }
 
-function LevelBadge({ level }: { level: LogEntry["level"] }) {
+function LevelBadge({ level }: { level: string }) {
   const styles =
-    level === "error"
+    level === "Error"
       ? "border-destructive/30 bg-destructive/10 text-destructive"
-      : level === "warn"
+      : level === "Warn"
         ? "border-[hsl(35,92%,55%)]/30 bg-[hsl(35,92%,55%)]/10 text-[hsl(35,92%,55%)]"
         : "border-[hsl(199,89%,48%)]/30 bg-[hsl(199,89%,48%)]/10 text-[hsl(199,89%,48%)]"
   return (
     <Badge variant="outline" className={`${styles} w-14 justify-center text-xs`}>
-      {level}
+      {level.toLowerCase()}
     </Badge>
   )
 }
 
 export function LogsPage() {
-  const [filter, setFilter] = useState<"all" | "info" | "warn" | "error">("all")
+  const [filter, setFilter] = useState<"all" | "Info" | "Warn" | "Error">("all")
   const [search, setSearch] = useState("")
+  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  const filteredLogs = MOCK_LOGS.filter((log) => {
+  useEffect(() => {
+    const fetchLogs = async () => {
+      try {
+        setLoading(true)
+        const response = await getLogs()
+        setLogs(response.data)
+        setError(null)
+      } catch (err) {
+        console.error("Failed to fetch logs:", err)
+        setError("Failed to load logs")
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchLogs()
+    
+    // Auto-refresh logs every 5 seconds
+    const interval = setInterval(fetchLogs, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const filteredLogs = logs.filter((log) => {
     const matchesLevel = filter === "all" || log.level === filter
     const matchesSearch =
       search === "" ||
@@ -48,12 +73,14 @@ export function LogsPage() {
         <p className="text-sm text-muted-foreground">System and relay event logs</p>
       </div>
 
-      <Alert>
-        <AlertCircle className="h-4 w-4" />
-        <AlertDescription>
-          Currently showing mock data. Backend logs API endpoint is not yet implemented.
-        </AlertDescription>
-      </Alert>
+      {error && (
+        <Card className="border-destructive/50 bg-destructive/10">
+          <CardContent className="flex items-center gap-2 p-4">
+            <AlertCircle className="h-4 w-4 text-destructive" />
+            <p className="text-sm text-destructive">{error}</p>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
@@ -66,18 +93,18 @@ export function LogsPage() {
           />
         </div>
         <div className="flex gap-1">
-          {(["all", "info", "warn", "error"] as const).map((level) => (
+          {(["all", "Info", "Warn", "Error"] as const).map((level) => (
             <Button
               key={level}
               variant="outline"
               size="sm"
               onClick={() => setFilter(level)}
               className={`border-border bg-transparent capitalize ${filter === level
-                  ? "bg-accent text-foreground"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                ? "bg-accent text-foreground"
+                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
                 }`}
             >
-              {level}
+              {level.toLowerCase()}
             </Button>
           ))}
         </div>
@@ -86,10 +113,17 @@ export function LogsPage() {
       <Card className="bg-card border-border">
         <CardContent className="p-0">
           <div className="flex flex-col divide-y divide-border">
-            {filteredLogs.length === 0 ? (
+            {loading ? (
+              <div className="flex flex-col items-center gap-2 py-12">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-muted border-t-primary" />
+                <p className="text-sm text-muted-foreground">Loading logs...</p>
+              </div>
+            ) : filteredLogs.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-12">
                 <Filter className="h-8 w-8 text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">No logs match your filter</p>
+                <p className="text-sm text-muted-foreground">
+                  {logs.length === 0 ? "No logs available yet" : "No logs match your filter"}
+                </p>
               </div>
             ) : (
               filteredLogs.map((log) => (

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as api from './api';
-import type { CreateRelayRequest, StartRelayRequest } from './types';
+import type { Config, CreateRelayRequest, StartRelayRequest } from './types';
 
 // Streams
 export const useStreams = () => {
@@ -102,6 +102,28 @@ export const useStopRelay = () => {
     mutationFn: (id: string) => api.stopRelay(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['relays'] });
+    },
+  });
+};
+
+// Config
+export const useConfig = () => {
+  return useQuery({
+    queryKey: ['config'],
+    queryFn: async () => {
+      const { data } = await api.getConfig();
+      return data;
+    },
+  });
+};
+
+export const useSaveConfig = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (config: Config) => api.saveConfig(config),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['config'] });
     },
   });
 };

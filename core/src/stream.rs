@@ -33,17 +33,17 @@ pub async fn process_rtmp_stream(
     
     info!("Starting stream data processing");
 
-    // Main streaming loop
-    let mut read_buffer = [0u8; 8192];
+    // Main streaming loop with larger buffer for better throughput
+    let mut read_buffer = [0u8; 65536]; // 64KB buffer
     let mut packets_received = 0;
 
     loop {
         let bytes_read = socket.read(&mut read_buffer).await?;
 
         if bytes_read == 0 {
-            println!(
-                "📊 [{}] Stream ended. Total: {} bytes, {} packets",
-                peer_addr, total_bytes, packets_received
+            tracing::info!(
+                peer_addr, total_bytes, packets_received,
+                "Stream ended"
             );
             break;
         }

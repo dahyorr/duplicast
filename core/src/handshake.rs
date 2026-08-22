@@ -1,43 +1,31 @@
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-// use tracing::{debug, instrument};
 
 type Result<T> = anyhow::Result<T>;
 
 pub async fn perform_rtmp_handshake(socket: &mut TcpStream, peer_addr: &str) -> Result<Vec<u8>> {
-    println!("🤝 [{}] Starting RTMP handshake...", peer_addr);
+    tracing::debug!(peer_addr, "Starting RTMP handshake");
 
     let mut handshake = Handshake::new(PeerType::Server);
     let mut buffer = [0u8; 4096];
     let mut handshake_step = 1;
 
     loop {
-        // Read data from the client
         let bytes_read = socket.read(&mut buffer).await?;
 
         if bytes_read == 0 {
             return Err(anyhow::anyhow!("Connection closed during handshake").into());
         }
 
-        println!(
-            "   [{}] Step {}: Received {} bytes",
-            peer_addr, handshake_step, bytes_read
-        );
+        tracing::debug!(peer_addr, step = handshake_step, bytes_read, "Handshake bytes received");
 
-        // Process the handshake bytes
         match handshake.process_bytes(&buffer[..bytes_read]) {
             Ok(HandshakeProcessResult::InProgress { response_bytes }) => {
-                // Handshake in progress - send response
                 if !response_bytes.is_empty() {
                     socket.write_all(&response_bytes).await?;
                     socket.flush().await?;
-                    println!(
-                        "   [{}] Step {}: Sent {} bytes response",
-                        peer_addr,
-                        handshake_step,
-                        response_bytes.len()
-                    );
+                    tracing::debug!(peer_addr, step = handshake_step, sent = response_bytes.len(), "Sent handshake response");
                 }
                 handshake_step += 1;
             }
@@ -45,22 +33,13 @@ pub async fn perform_rtmp_handshake(socket: &mut TcpStream, peer_addr: &str) -> 
                 response_bytes,
                 remaining_bytes,
             }) => {
-                // Handshake complete - send final response
                 if !response_bytes.is_empty() {
                     socket.write_all(&response_bytes).await?;
                     socket.flush().await?;
-                    println!(
-                        "   [{}] Final: Sent {} bytes response",
-                        peer_addr,
-                        response_bytes.len()
-                    );
+                    tracing::debug!(peer_addr, sent = response_bytes.len(), "Sent final handshake response");
                 }
 
-                println!(
-                    "✅ [{}] RTMP handshake completed successfully! ({} bytes remaining)",
-                    peer_addr,
-                    remaining_bytes.len()
-                );
+                tracing::debug!(peer_addr, remaining = remaining_bytes.len(), "RTMP handshake complete");
 
                 return Ok(remaining_bytes);
             }
