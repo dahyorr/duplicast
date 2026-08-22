@@ -185,10 +185,49 @@ jobs:
           name: duplicast-core-linux-x86_64-bundled
           path: duplicast-core-linux-x86_64-bundled.tar.gz
 
+  bundled-macos:
+    name: Bundled build (macOS, no system GStreamer required)
+    needs: frontend
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GStreamer and dylibbundler
+        run: |
+          brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly dylibbundler
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: cargo build --release
+        working-directory: core
+        run: cargo build --release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: client/dist
+
+      - name: Bundle
+        run: ./scripts/bundle-macos.sh dist-bundle-macos
+
+      - name: Archive
+        run: tar -C dist-bundle-macos -czf duplicast-core-macos-arm64-bundled.tar.gz .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: duplicast-core-macos-arm64-bundled
+          path: duplicast-core-macos-arm64-bundled.tar.gz
+
   release:
     name: Create GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [native, bundled-linux]
+    needs: [native, bundled-linux, bundled-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
