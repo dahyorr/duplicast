@@ -29,6 +29,91 @@ fn load_config_sync() -> Config {
         .unwrap_or_default()
 }
 
+fn relays_file_path() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("DUPLICAST_RELAYS_PATH") {
+        return std::path::PathBuf::from(path);
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("duplicast_relays.json")))
+        .unwrap_or_else(|| std::path::PathBuf::from("duplicast_relays.json"))
+}
+
+// On-disk shape for a relay: only the fields that should survive a restart.
+// Runtime state (status, stream_id, timestamps, bytes_sent) is intentionally
+// dropped - a relay can't actually be "active" across a restart since its
+// GStreamer pipeline is gone. stream_key is encrypted (see crate::crypto);
+// everything else is plaintext since it's not sensitive.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedRelay {
+    id: Uuid,
+    name: String,
+    rtmp_url: String,
+    stream_key_encrypted: String,
+    enabled: bool,
+}
+
+fn load_relays_sync() -> HashMap<Uuid, Relay> {
+    let Ok(content) = std::fs::read_to_string(relays_file_path()) else {
+        return HashMap::new();
+    };
+    let Ok(persisted) = serde_json::from_str::<Vec<PersistedRelay>>(&content) else {
+        tracing::warn!("Failed to parse duplicast_relays.json, ignoring saved relays");
+        return HashMap::new();
+    };
+
+    persisted
+        .into_iter()
+        .filter_map(|p| {
+            let stream_key = match crate::crypto::decrypt(&p.stream_key_encrypted) {
+                Ok(key) => key,
+                Err(e) => {
+                    tracing::warn!(relay_id = %p.id, error = %e, "Could not decrypt stream key for saved relay, skipping it");
+                    return None;
+                }
+            };
+            Some((
+                p.id,
+                Relay {
+                    id: p.id,
+                    name: p.name,
+                    rtmp_url: p.rtmp_url,
+                    stream_key,
+                    stream_id: None,
+                    status: RelayStatus::Idle,
+                    created_at: Utc::now(),
+                    started_at: None,
+                    stopped_at: None,
+                    bytes_sent: 0,
+                    enabled: p.enabled,
+                },
+            ))
+        })
+        .collect()
+}
+
+async fn save_relays(relays: &HashMap<Uuid, Relay>) {
+    let persisted: Vec<PersistedRelay> = relays
+        .values()
+        .map(|r| PersistedRelay {
+            id: r.id,
+            name: r.name.clone(),
+            rtmp_url: r.rtmp_url.clone(),
+            stream_key_encrypted: crate::crypto::encrypt(&r.stream_key),
+            enabled: r.enabled,
+        })
+        .collect();
+
+    match serde_json::to_string_pretty(&persisted) {
+        Ok(json) => {
+            if let Err(e) = tokio::fs::write(relays_file_path(), json).await {
+                tracing::warn!(error = %e, "Failed to save relays to disk");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "Failed to serialize relays for saving"),
+    }
+}
+
 // Per-stream GStreamer pipeline handles.
 pub struct StreamPipeline {
     pub pipeline: gstreamer::Pipeline,
@@ -91,7 +176,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             streams: Arc::new(RwLock::new(HashMap::new())),
-            relays: Arc::new(RwLock::new(HashMap::new())),
+            relays: Arc::new(RwLock::new(load_relays_sync())),
             stream_by_key: Arc::new(RwLock::new(HashMap::new())),
             logs: Arc::new(RwLock::new(Vec::new())),
             pipelines: Arc::new(RwLock::new(HashMap::new())),
@@ -361,6 +446,7 @@ impl AppState {
 
         let mut relays = self.relays.write().await;
         relays.insert(relay_id, relay);
+        save_relays(&relays).await;
 
         relay_id
     }
@@ -482,6 +568,7 @@ impl AppState {
 
         let mut relays = self.relays.write().await;
         relays.remove(&relay_id).ok_or("Relay not found")?;
+        save_relays(&relays).await;
         Ok(())
     }
 

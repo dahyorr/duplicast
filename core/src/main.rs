@@ -1,3 +1,4 @@
+mod crypto;
 mod flv;
 mod handshake;
 mod management;
