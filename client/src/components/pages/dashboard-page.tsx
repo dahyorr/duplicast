@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useStats, useRelays, useStreams, useStartRelay, useStopRelay } from "@/hooks"
-import { formatBytes, formatUptime, formatBitrate } from "@/lib/mock-data"
+import { formatBytes, formatUptime, formatBitrate } from "@/lib/format"
 import { getRelayStatus } from "@/lib/status-utils"
 import { StreamPreview } from "@/components/StreamPreview"
 import {
@@ -49,11 +49,8 @@ export function DashboardPage() {
     }, 1000)
     return () => clearInterval(interval)
   }, [])
-  // console.log(relays)
   const activeStream = streams[0]; // Get the first active stream
-  // const activeRelays = relays.filter((r) => 'Active' in r.status).length;
-  const errorRelays = relays.filter((r) => r.status === 'Error').length;
-  // const errorRelays = 0;
+  const errorRelays = relays.filter((r) => getRelayStatus(r.status) === 'error').length;
 
   // Mock bitrate history for now - in a real app, you'd track this over time
   const bitrateHistory = useMemo(() => {
@@ -75,7 +72,7 @@ export function DashboardPage() {
   const startAll = useCallback(() => {
     if (!activeStream) return;
     for (const relay of relays) {
-      if (relay.status !== 'Active') {
+      if (getRelayStatus(relay.status) !== 'active') {
         startRelayMutation.mutate({ id: relay.id, data: { stream_id: activeStream.id } });
       }
     }
@@ -83,7 +80,8 @@ export function DashboardPage() {
 
   const stopAll = useCallback(() => {
     for (const relay of relays) {
-      if (relay.status === 'Active' || relay.status === 'Connecting') {
+      const status = getRelayStatus(relay.status);
+      if (status === 'active' || status === 'connecting') {
         stopRelayMutation.mutate(relay.id);
       }
     }
@@ -164,7 +162,7 @@ export function DashboardPage() {
         <StreamPreview
           streamUrl={`rtmp://localhost:1935/${activeStream.app_name}/${activeStream.stream_key}`}
           streamId={activeStream.id}
-          autoPlay={false}
+          autoPlay={true}
         />
       )}
 
@@ -343,7 +341,7 @@ export function DashboardPage() {
               <p className="text-sm text-muted-foreground">No recent errors</p>
             ) : (
               relays
-                .filter(r => r.status === 'Error')
+                .filter(r => getRelayStatus(r.status) === 'error')
                 .map((relay) => (
                   <div key={relay.id} className="flex flex-col gap-1 rounded-lg bg-destructive/5 px-4 py-3">
                     <div className="flex items-center justify-between">
@@ -355,7 +353,7 @@ export function DashboardPage() {
                       </span>
                     </div>
                     <p className="text-sm text-foreground">
-                      {relay.status === 'Error' ? 'Error' : 'Unknown error'}
+                      {relay.status.status === 'error' ? relay.status.message : 'Unknown error'}
                     </p>
                   </div>
                 ))

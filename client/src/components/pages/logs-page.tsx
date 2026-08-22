@@ -1,12 +1,11 @@
 
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import { Search, Filter, AlertTriangle, Info, AlertCircle } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { getLogs } from "@/api"
-import type { LogEntry } from "@/types"
+import { useLogs } from "@/hooks"
 
 function LogIcon({ level }: { level: string }) {
   if (level === "Error") return <AlertCircle className="h-4 w-4 text-destructive" />
@@ -31,31 +30,8 @@ function LevelBadge({ level }: { level: string }) {
 export function LogsPage() {
   const [filter, setFilter] = useState<"all" | "Info" | "Warn" | "Error">("all")
   const [search, setSearch] = useState("")
-  const [logs, setLogs] = useState<LogEntry[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    const fetchLogs = async () => {
-      try {
-        setLoading(true)
-        const response = await getLogs()
-        setLogs(response.data)
-        setError(null)
-      } catch (err) {
-        console.error("Failed to fetch logs:", err)
-        setError("Failed to load logs")
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    fetchLogs()
-    
-    // Auto-refresh logs every 5 seconds
-    const interval = setInterval(fetchLogs, 5000)
-    return () => clearInterval(interval)
-  }, [])
+  const { data: logs = [], isLoading: loading, isError } = useLogs()
+  const error = isError ? "Failed to load logs" : null
 
   const filteredLogs = logs.filter((log) => {
     const matchesLevel = filter === "all" || log.level === filter

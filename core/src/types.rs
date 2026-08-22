@@ -1,5 +1,5 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, Serializer};
-use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
 fn mask_key<S: Serializer>(key: &str, ser: S) -> Result<S::Ok, S::Error> {
@@ -8,31 +8,24 @@ fn mask_key<S: Serializer>(key: &str, ser: S) -> Result<S::Ok, S::Error> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub listen_addr: String,
     pub rtmp_port: u16,
-    pub max_bitrate_kbps: u64,
     pub relay_auto_reconnect: bool,
     pub relay_reconnect_delay_secs: u64,
     pub relay_reconnect_attempts: u32,
-    pub log_level: String,
-    pub health_check_interval_secs: u64,
-    pub api_enabled: bool,
     pub api_port: u16,
+    /// host:port of the STUN server used for WebRTC preview NAT traversal.
+    pub stun_server: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            listen_addr: "0.0.0.0".to_string(),
             rtmp_port: 1935,
-            max_bitrate_kbps: 8000,
             relay_auto_reconnect: true,
             relay_reconnect_delay_secs: 5,
             relay_reconnect_attempts: 10,
-            log_level: "info".to_string(),
-            health_check_interval_secs: 300,
-            api_enabled: true,
             api_port: 8080,
+            stun_server: "stun.l.google.com:19302".to_string(),
         }
     }
 }
@@ -43,12 +36,13 @@ pub struct Stream {
     pub stream_key: String,
     pub app_name: String,
     pub publisher_addr: String,
-    pub started_at: SystemTime,
+    pub started_at: DateTime<Utc>,
     pub bitrate: BitrateStats,
     pub status: StreamStatus,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", content = "message", rename_all = "lowercase")]
 pub enum StreamStatus {
     Active,
     Inactive,
@@ -62,7 +56,8 @@ pub struct BitrateStats {
     pub total_bitrate: u64,    // bits per second
     pub total_bytes: u64,
     pub packets_received: u64,
-    pub last_updated: Option<SystemTime>,
+    pub last_updated: Option<DateTime<Utc>>,
+    #[serde(skip)]
     bytes_in_current_period: u64, // Track bytes in current measurement period
 }
 
@@ -75,14 +70,15 @@ pub struct Relay {
     pub stream_key: String,
     pub stream_id: Option<Uuid>,
     pub status: RelayStatus,
-    pub created_at: SystemTime,
-    pub started_at: Option<SystemTime>,
-    pub stopped_at: Option<SystemTime>,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub stopped_at: Option<DateTime<Utc>>,
     pub bytes_sent: u64,
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", content = "message", rename_all = "lowercase")]
 pub enum RelayStatus {
     Idle,
     Connecting,
@@ -122,6 +118,7 @@ pub struct WebRTCAnswer {
     pub sdp: String,
     #[serde(rename = "type")]
     pub type_: String,
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,21 +150,77 @@ impl BitrateStats {
     pub fn update(&mut self, bytes: u64) {
         self.total_bytes += bytes;
         self.packets_received += 1;
-        
+
         if let Some(last_updated) = self.last_updated {
             self.bytes_in_current_period += bytes;
-            
-            if let Ok(duration) = SystemTime::now().duration_since(last_updated) {
-                if duration >= Duration::from_secs(1) {
-                    // Calculate bitrate based on all bytes received in this period
-                    self.total_bitrate = (self.bytes_in_current_period * 8) as u64; // Convert to bits
-                    self.bytes_in_current_period = 0; // Reset for next period
-                    self.last_updated = Some(SystemTime::now());
-                }
+
+            let elapsed = Utc::now().signed_duration_since(last_updated);
+            if elapsed >= chrono::Duration::seconds(1) {
+                // Calculate bitrate based on all bytes received in this period
+                self.total_bitrate = self.bytes_in_current_period * 8; // Convert to bits
+                self.bytes_in_current_period = 0; // Reset for next period
+                self.last_updated = Some(Utc::now());
             }
         } else {
-            self.last_updated = Some(SystemTime::now());
+            self.last_updated = Some(Utc::now());
             self.bytes_in_current_period = bytes;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_unit_variant_serializes_as_bare_status_string() {
+        let json = serde_json::to_value(StreamStatus::Active).unwrap();
+        assert_eq!(json, serde_json::json!({"status": "active"}));
+
+        let json = serde_json::to_value(RelayStatus::Idle).unwrap();
+        assert_eq!(json, serde_json::json!({"status": "idle"}));
+    }
+
+    #[test]
+    fn status_error_variant_serializes_with_message() {
+        let json = serde_json::to_value(RelayStatus::Error("connection lost".to_string())).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"status": "error", "message": "connection lost"})
+        );
+    }
+
+    #[test]
+    fn status_round_trips_through_json() {
+        for status in [
+            RelayStatus::Idle,
+            RelayStatus::Connecting,
+            RelayStatus::Active,
+            RelayStatus::Stopped,
+            RelayStatus::Error("boom".to_string()),
+        ] {
+            let json = serde_json::to_string(&status).unwrap();
+            let back: RelayStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(status, back);
+        }
+    }
+
+    #[test]
+    fn timestamp_fields_serialize_as_rfc3339_strings() {
+        let stream = Stream {
+            id: Uuid::new_v4(),
+            stream_key: "key".to_string(),
+            app_name: "app".to_string(),
+            publisher_addr: "127.0.0.1:1935".to_string(),
+            started_at: Utc::now(),
+            bitrate: BitrateStats::default(),
+            status: StreamStatus::Active,
+        };
+
+        let json = serde_json::to_value(&stream).unwrap();
+        let started_at = json.get("started_at").unwrap();
+        assert!(started_at.is_string());
+        // Must parse back as a valid RFC3339 timestamp, not a {secs,nanos} object.
+        DateTime::parse_from_rfc3339(started_at.as_str().unwrap()).unwrap();
     }
 }

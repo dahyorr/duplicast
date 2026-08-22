@@ -1,10 +1,10 @@
+mod flv;
 mod handshake;
 mod management;
 mod pipeline;
 mod server;
 mod session;
 mod state;
-mod stream;
 mod types;
 
 use state::AppState;
@@ -54,8 +54,9 @@ async fn main() -> Result<()> {
     }).await;
 
     // Server configuration
-    let rtmp_port = 1935;
-    let management_port = 8080;
+    let config = state.get_config().await;
+    let rtmp_port = config.rtmp_port;
+    let management_port = config.api_port;
 
     // Start management server in background
     let management_state = state.clone();
@@ -66,8 +67,44 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Start the RTMP server (blocking)
-    server::start_server(rtmp_port, state).await?;
+    // Run the RTMP server until it errors out or a shutdown signal arrives.
+    let rtmp_state = state.clone();
+    tokio::select! {
+        result = server::start_server(rtmp_port, rtmp_state) => {
+            if let Err(e) = result {
+                tracing::error!(error = ?e, "RTMP server error");
+            }
+        }
+        _ = shutdown_signal() => {
+            info!("Shutdown signal received, tearing down active pipelines");
+        }
+    }
+
+    state.shutdown().await;
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
 }

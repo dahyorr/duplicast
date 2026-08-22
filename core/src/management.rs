@@ -1,12 +1,15 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
-    http::StatusCode,
-    response::IntoResponse,
+    body::Body,
+    extract::{Path, Request, State},
+    http::{HeaderMap, StatusCode, header},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 use serde_json::json;
 use std::sync::{Arc, Mutex};
+use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
@@ -19,43 +22,73 @@ use crate::types::{
 };
 
 pub fn create_router(state: AppState) -> Router {
-    let api_router = Router::new()
-        // Stream endpoints
-        .route("/api/streams", get(list_streams))
-        .route("/api/streams/{id}", get(get_stream))
-        .route("/api/streams/{id}/info", get(get_stream_info))
-        // Relay endpoints
-        .route("/api/relays", get(list_relays))
+    if std::env::var("DUPLICAST_API_TOKEN").is_err() {
+        warn!("DUPLICAST_API_TOKEN not set - management API mutations are unauthenticated");
+    }
+
+    // Mutating endpoints - require a bearer token if DUPLICAST_API_TOKEN is set.
+    let protected = Router::new()
         .route("/api/relays", post(create_relay))
-        .route("/api/relays/{id}", get(get_relay))
         .route("/api/relays/{id}", delete(delete_relay))
         .route("/api/relays/{id}/start", post(start_relay))
         .route("/api/relays/{id}/stop", post(stop_relay))
-        // WebRTC preview endpoints
+        .route("/api/streams/{id}/webrtc/{session_id}", delete(webrtc_hangup))
+        .route("/api/config", axum::routing::put(update_config))
+        .route_layer(middleware::from_fn(require_auth));
+
+    // Read-only / viewer endpoints - no auth required.
+    let public = Router::new()
+        .route("/api/streams", get(list_streams))
+        .route("/api/streams/{id}", get(get_stream))
+        .route("/api/streams/{id}/info", get(get_stream_info))
+        .route("/api/relays", get(list_relays))
+        .route("/api/relays/{id}", get(get_relay))
         .route("/api/streams/{id}/webrtc/offer", post(webrtc_offer))
         .route("/api/streams/{id}/webrtc/ice", post(webrtc_ice))
-        // Logs endpoint
+        .route("/api/streams/{id}/flv", get(stream_flv))
         .route("/api/logs", get(get_logs))
-        // Config endpoints
         .route("/api/config", get(get_config))
-        .route("/api/config", axum::routing::put(update_config))
-        // Health check and stats
         .route("/api/health", get(health_check))
-        .route("/api/stats", get(get_stats))
-        .with_state(state)
-        .layer(CorsLayer::permissive());
+        .route("/api/stats", get(get_stats));
 
-    // Check if client dist folder exists
-    let client_dist = std::path::Path::new("../client/dist");
-    if client_dist.exists() {
-        info!("Serving frontend from ../client/dist");
-        // Serve static files from client/dist with API fallback
-        api_router.fallback_service(ServeDir::new("../client/dist"))
+    // Permissive CORS is only needed for `npm run dev` (Vite on a different port than
+    // the API). In release builds the frontend is served same-origin via the ServeDir
+    // fallback below, so cross-origin requests aren't expected and don't need to be allowed.
+    let cors = if cfg!(debug_assertions) {
+        CorsLayer::permissive()
     } else {
-        warn!("Client dist folder not found. Serving API only.");
-        warn!("Run 'cd client && npm run build' to build the frontend.");
+        CorsLayer::new()
+    };
+
+    let api_router = protected.merge(public).with_state(state).layer(cors);
+
+    // Check if the client dist folder exists (override via DUPLICAST_STATIC_DIR,
+    // otherwise default to the path used by `cargo run` from core/).
+    let client_dist = std::env::var("DUPLICAST_STATIC_DIR").unwrap_or_else(|_| "../client/dist".to_string());
+    if std::path::Path::new(&client_dist).exists() {
+        info!(dir = %client_dist, "Serving frontend");
+        // Serve static files from client/dist with API fallback
+        api_router.fallback_service(ServeDir::new(client_dist))
+    } else {
+        warn!(dir = %client_dist, "Client dist folder not found. Serving API only.");
+        warn!("Run 'cd client && npm run build' to build the frontend, or set DUPLICAST_STATIC_DIR.");
         api_router
     }
+}
+
+async fn require_auth(headers: HeaderMap, request: Request, next: Next) -> Result<Response, StatusCode> {
+    if let Ok(token) = std::env::var("DUPLICAST_API_TOKEN") {
+        if !token.is_empty() {
+            let provided = headers
+                .get(header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "));
+            if provided != Some(token.as_str()) {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        }
+    }
+    Ok(next.run(request).await)
 }
 
 pub async fn start_management_server(state: AppState, port: u16) -> anyhow::Result<()> {
@@ -256,13 +289,14 @@ async fn webrtc_offer(
 
     let session_id = Uuid::new_v4().to_string();
     let offer_sdp = offer.sdp.clone();
+    let stun_server = state.get_config().await.stun_server;
 
     let session = {
         let answer_tx = answer_tx.clone();
         tokio::task::spawn_blocking(move || {
             crate::state::attach_webrtc_to_pipeline(
                 &pipeline, &videotee, &audiotee,
-                id, &offer_sdp, answer_tx,
+                id, &offer_sdp, &stun_server, answer_tx,
             )
         })
         .await
@@ -308,7 +342,16 @@ async fn webrtc_offer(
     Ok(Json(WebRTCAnswer {
         sdp: answer_sdp,
         type_: "answer".to_string(),
+        session_id,
     }))
+}
+
+async fn webrtc_hangup(
+    State(state): State<AppState>,
+    Path((_stream_id, session_id)): Path<(Uuid, String)>,
+) -> impl IntoResponse {
+    state.remove_webrtc_session(&session_id).await;
+    StatusCode::NO_CONTENT
 }
 
 async fn webrtc_ice(
@@ -322,6 +365,55 @@ async fn webrtc_ice(
         return Err(StatusCode::NOT_FOUND);
     }
     Ok(StatusCode::OK)
+}
+
+/// Streams the live stream as an HTTP-FLV byte stream (video/x-flv), playable via
+/// flv.js/Media Source Extensions. Simpler and far more robust than the WebRTC
+/// preview - no ICE/DTLS/codec negotiation, at the cost of ~1-3s of buffering
+/// latency, which is fine for a personal dashboard preview.
+async fn stream_flv(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Response, StatusCode> {
+    let (header_bytes, video_config, audio_config, mut rx) =
+        state.flv_subscribe(id).await.ok_or(StatusCode::NOT_FOUND)?;
+
+    let (tx, out_rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(64);
+
+    tokio::spawn(async move {
+        if tx.send(Ok(header_bytes)).await.is_err() {
+            return;
+        }
+        if let Some(v) = video_config {
+            if tx.send(Ok(v)).await.is_err() {
+                return;
+            }
+        }
+        if let Some(a) = audio_config {
+            if tx.send(Ok(a)).await.is_err() {
+                return;
+            }
+        }
+        loop {
+            match rx.recv().await {
+                Ok(tag) => {
+                    if tx.send(Ok(tag)).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    let body = Body::from_stream(ReceiverStream::new(out_rx));
+
+    Response::builder()
+        .header(header::CONTENT_TYPE, "video/x-flv")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .body(body)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 async fn get_logs(State(state): State<AppState>) -> impl IntoResponse {
@@ -339,9 +431,6 @@ async fn update_config(
 ) -> Result<impl IntoResponse, StatusCode> {
     // Basic validation.
     if new_config.rtmp_port == 0 || new_config.api_port == 0 {
-        return Err(StatusCode::UNPROCESSABLE_ENTITY);
-    }
-    if !["debug", "info", "warn", "error"].contains(&new_config.log_level.as_str()) {
         return Err(StatusCode::UNPROCESSABLE_ENTITY);
     }
 

@@ -4,7 +4,9 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Play, Pause, Maximize2, Volume2, VolumeX, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { sendWebRTCOffer } from "@/api"
+import { sendWebRTCOffer, sendWebRTCHangup, getFlvUrl } from "@/api"
+import { useConfig } from "@/hooks"
+import flvjs from "flv.js"
 
 interface StreamPreviewProps {
   streamUrl?: string
@@ -13,34 +15,89 @@ interface StreamPreviewProps {
   autoPlay?: boolean
 }
 
+type PreviewMode = "flv" | "webrtc"
+
 export function StreamPreview({ streamUrl, streamId, className, autoPlay = false }: StreamPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const [mode, setMode] = useState<PreviewMode>("flv")
   const [isPlaying, setIsPlaying] = useState(autoPlay)
   const [isMuted, setIsMuted] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [peerConnection, setPeerConnection] = useState<RTCPeerConnection | null>(null)
+  const { data: config } = useConfig()
 
+  // HTTP-FLV playback (default). Far simpler than WebRTC - just an HTTP stream
+  // decoded via Media Source Extensions, no ICE/DTLS/codec negotiation.
   useEffect(() => {
-    if (!streamUrl || !streamId || !videoRef.current) return
+    if (mode !== "flv" || !streamUrl || !streamId || !videoRef.current || !isPlaying) return
+    if (!flvjs.isSupported()) {
+      setError("HTTP-FLV playback isn't supported in this browser")
+      return
+    }
+
+    let cancelled = false
+    setIsLoading(true)
+    setError(null)
+
+    const player = flvjs.createPlayer({ type: "flv", url: getFlvUrl(streamId), isLive: true })
+    player.attachMediaElement(videoRef.current)
+
+    player.on(flvjs.Events.ERROR, (...args: unknown[]) => {
+      if (cancelled) return
+      console.error("flv.js error:", ...args)
+      setError("Playback error")
+      setIsLoading(false)
+    })
+
+    const video = videoRef.current
+    const onCanPlay = () => { if (!cancelled) setIsLoading(false) }
+    video.addEventListener("canplay", onCanPlay)
+
+    player.load()
+    player.play().catch((err) => {
+      if (cancelled) return
+      console.error("Play failed:", err)
+      setIsPlaying(false)
+    })
+
+    return () => {
+      cancelled = true
+      video.removeEventListener("canplay", onCanPlay)
+      player.pause()
+      player.unload()
+      player.detachMediaElement()
+      player.destroy()
+    }
+  }, [mode, streamUrl, streamId, isPlaying])
+
+  // WebRTC playback (lower latency, more moving parts - offered as an alternative).
+  useEffect(() => {
+    if (mode !== "webrtc" || !streamUrl || !streamId || !videoRef.current || !isPlaying) return
+
+    // Effect-scoped (not React state) so this run's cleanup always sees exactly
+    // what this run created - React StrictMode double-invokes effects in dev
+    // mode (mount -> cleanup -> mount again), and a stale/shared reference here
+    // would either miss cleanup or tear down the wrong connection.
+    let cancelled = false
+    let pc: RTCPeerConnection | null = null
+    let sessionId: string | null = null
 
     const initWebRTC = async () => {
       setIsLoading(true)
       setError(null)
 
       try {
-        // Create RTCPeerConnection
-        const pc = new RTCPeerConnection({
-          iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        const stunServer = config?.stun_server || "stun.l.google.com:19302"
+        const localPc = new RTCPeerConnection({
+          iceServers: [{ urls: `stun:${stunServer}` }],
         })
+        pc = localPc
 
-        // Handle incoming track
-        pc.ontrack = (event) => {
+        localPc.ontrack = (event) => {
+          if (cancelled) return
           if (videoRef.current && event.streams[0]) {
             videoRef.current.srcObject = event.streams[0]
             setIsLoading(false)
-            // Always play: we're here because the user initiated playback (isPlaying=true)
-            // or autoPlay is true. Either way, start the video.
             videoRef.current.play().catch((err) => {
               console.error("Play failed:", err)
               setIsPlaying(false)
@@ -48,37 +105,37 @@ export function StreamPreview({ streamUrl, streamId, className, autoPlay = false
           }
         }
 
-        // Handle connection state changes
-        pc.onconnectionstatechange = () => {
-          console.log("Connection state:", pc.connectionState)
-          if (pc.connectionState === "failed") {
+        localPc.onconnectionstatechange = () => {
+          if (cancelled) return
+          if (localPc.connectionState === "failed") {
             setError("Connection failed")
             setIsLoading(false)
-          } else if (pc.connectionState === "connected") {
+          } else if (localPc.connectionState === "connected") {
             setIsLoading(false)
           }
         }
 
-        // Create offer and set as local description.
-        const offer = await pc.createOffer({
+        const offer = await localPc.createOffer({
           offerToReceiveVideo: true,
           offerToReceiveAudio: true,
         })
-        await pc.setLocalDescription(offer)
+        if (cancelled) { localPc.close(); return }
+        await localPc.setLocalDescription(offer)
 
         // Wait for all ICE candidates to be gathered before sending the offer.
         // This way the SDP contains the full candidate list and no trickle exchange
         // is needed.
         await new Promise<void>((resolve) => {
-          if (pc.iceGatheringState === "complete") { resolve(); return }
-          const done = () => { if (pc.iceGatheringState === "complete") resolve() }
-          pc.addEventListener("icegatheringstatechange", done)
+          if (localPc.iceGatheringState === "complete") { resolve(); return }
+          const done = () => { if (localPc.iceGatheringState === "complete") resolve() }
+          localPc.addEventListener("icegatheringstatechange", done)
           // Safety valve: send after 10 s even if gathering isn't marked complete.
           setTimeout(resolve, 10_000)
         })
+        if (cancelled) { localPc.close(); return }
 
         // pc.localDescription now includes all gathered candidates.
-        const fullOffer = pc.localDescription!
+        const fullOffer = localPc.localDescription!
 
         // Send offer to signaling server and get answer
         const response = await sendWebRTCOffer(streamId, {
@@ -86,34 +143,47 @@ export function StreamPreview({ streamUrl, streamId, className, autoPlay = false
           type: fullOffer.type,
         })
 
+        if (cancelled) {
+          // A server-side session now exists for an effect run we no longer want -
+          // hang it up immediately instead of leaking it until the stream ends.
+          sendWebRTCHangup(streamId, response.data.session_id).catch(() => {})
+          localPc.close()
+          return
+        }
+        sessionId = response.data.session_id
+
         // Set remote description with the answer
         const answer = new RTCSessionDescription({
           sdp: response.data.sdp,
           type: "answer",
         })
-        await pc.setRemoteDescription(answer)
-
-        console.log("WebRTC connection established")
-        setPeerConnection(pc)
+        await localPc.setRemoteDescription(answer)
       } catch (err) {
-        console.error("WebRTC initialization failed:", err)
-        setError(err instanceof Error ? err.message : "Failed to initialize stream")
-        setIsLoading(false)
+        if (!cancelled) {
+          console.error("WebRTC initialization failed:", err)
+          setError(err instanceof Error ? err.message : "Failed to initialize stream")
+          setIsLoading(false)
+        }
       }
     }
 
-    if (isPlaying) {
-      initWebRTC()
-    }
+    initWebRTC()
 
     return () => {
-      if (peerConnection) {
-        peerConnection.close()
-        setPeerConnection(null)
+      cancelled = true
+      if (sessionId) {
+        sendWebRTCHangup(streamId, sessionId).catch(() => {
+          // Best effort - the session will still be cleaned up server-side
+          // when the underlying stream ends.
+        })
       }
+      pc?.close()
     }
+    // config is intentionally not a dependency: if it resolves/changes after this
+    // effect already started negotiating, we don't want to tear down and restart
+    // an in-progress or already-connected preview over a STUN server change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streamUrl, streamId, isPlaying, autoPlay])
+  }, [mode, streamUrl, streamId, isPlaying])
 
   const togglePlay = () => {
     if (!videoRef.current) return
@@ -121,13 +191,15 @@ export function StreamPreview({ streamUrl, streamId, className, autoPlay = false
     if (isPlaying) {
       videoRef.current.pause()
       setIsPlaying(false)
-      if (peerConnection) {
-        peerConnection.close()
-        setPeerConnection(null)
-      }
     } else {
       setIsPlaying(true)
     }
+  }
+
+  const switchMode = (next: PreviewMode) => {
+    if (next === mode) return
+    setError(null)
+    setMode(next)
   }
 
   const toggleMute = () => {
@@ -215,6 +287,32 @@ export function StreamPreview({ streamUrl, streamId, className, autoPlay = false
               <Maximize2 className="h-4 w-4" />
             </Button>
           </div>
+        </div>
+
+        {/* Mode toggle - always visible, not just on hover. Rendered last so it
+            stacks above the Controls Overlay, which covers the whole card and
+            would otherwise swallow clicks on this corner even at opacity 0. */}
+        <div className="absolute top-2 right-2 flex overflow-hidden rounded-md border border-white/20 bg-black/50 text-xs">
+          <button
+            type="button"
+            onClick={() => switchMode("flv")}
+            className={cn(
+              "px-2 py-1 transition-colors",
+              mode === "flv" ? "bg-primary text-primary-foreground" : "text-white/70 hover:text-white"
+            )}
+          >
+            FLV
+          </button>
+          <button
+            type="button"
+            onClick={() => switchMode("webrtc")}
+            className={cn(
+              "px-2 py-1 transition-colors",
+              mode === "webrtc" ? "bg-primary text-primary-foreground" : "text-white/70 hover:text-white"
+            )}
+          >
+            WebRTC
+          </button>
         </div>
       </CardContent>
     </Card>

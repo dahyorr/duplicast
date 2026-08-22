@@ -1,17 +1,29 @@
 use crate::pipeline::PipelineSetup;
 use crate::types::{Config, LogEntry, LogLevel, Relay, RelayStatus, Stream, StreamStatus};
+use bytes::Bytes;
 use gstreamer::prelude::{ElementExt, GstBinExt, PadExt, PadExtManual, *};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use chrono::Utc;
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-const CONFIG_FILE: &str = "duplicast_config.json";
+fn config_file_path() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("DUPLICAST_CONFIG_PATH") {
+        return std::path::PathBuf::from(path);
+    }
+    // Fall back to a path next to the executable so it doesn't depend on CWD
+    // when launched from e.g. systemd, while still keeping local `cargo run`
+    // convenient (target/debug/duplicast_config.json).
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("duplicast_config.json")))
+        .unwrap_or_else(|| std::path::PathBuf::from("duplicast_config.json"))
+}
 
 fn load_config_sync() -> Config {
-    std::fs::read_to_string(CONFIG_FILE)
+    std::fs::read_to_string(config_file_path())
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
@@ -53,6 +65,16 @@ pub struct RelayElements {
     pub bytes_sent: Arc<AtomicU64>,
 }
 
+// Fans out the FLV-tagged bytes for one stream (the same bytes already pushed
+// into the ingest appsrc) to any number of HTTP-FLV preview viewers. Sequence
+// header tags (AVCDecoderConfigurationRecord / AudioSpecificConfig) are cached
+// so a viewer that joins mid-stream still gets a decodable init segment.
+pub struct FlvBroadcaster {
+    pub tx: tokio::sync::broadcast::Sender<Bytes>,
+    pub video_config: Mutex<Option<Bytes>>,
+    pub audio_config: Mutex<Option<Bytes>>,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub streams: Arc<RwLock<HashMap<Uuid, Stream>>>,
@@ -62,6 +84,7 @@ pub struct AppState {
     pub pipelines: Arc<RwLock<HashMap<Uuid, StreamPipeline>>>,
     pub relay_elements: Arc<RwLock<HashMap<Uuid, RelayElements>>>,
     pub webrtc_sessions: Arc<RwLock<HashMap<String, WebRTCSession>>>,
+    pub flv_broadcasters: Arc<RwLock<HashMap<Uuid, Arc<FlvBroadcaster>>>>,
     pub config: Arc<RwLock<Config>>,
 }
 
@@ -75,6 +98,7 @@ impl AppState {
             pipelines: Arc::new(RwLock::new(HashMap::new())),
             relay_elements: Arc::new(RwLock::new(HashMap::new())),
             webrtc_sessions: Arc::new(RwLock::new(HashMap::new())),
+            flv_broadcasters: Arc::new(RwLock::new(HashMap::new())),
             config: Arc::new(RwLock::new(load_config_sync())),
         }
     }
@@ -96,13 +120,23 @@ impl AppState {
         }
     }
 
+    /// Tears down every active GStreamer pipeline (stream ingest + attached relay/WebRTC
+    /// elements). Called on process shutdown so a restart doesn't leave dangling
+    /// GStreamer subprocesses or half-written relay connections.
+    pub async fn shutdown(&self) {
+        let pipelines = self.pipelines.read().await;
+        for pipeline in pipelines.values() {
+            let _ = pipeline.pipeline.set_state(gstreamer::State::Null);
+        }
+    }
+
     pub async fn get_config(&self) -> Config {
         self.config.read().await.clone()
     }
 
     pub async fn update_config(&self, new_config: Config) -> anyhow::Result<()> {
         let json = serde_json::to_string_pretty(&new_config)?;
-        tokio::fs::write(CONFIG_FILE, json).await?;
+        tokio::fs::write(config_file_path(), json).await?;
         *self.config.write().await = new_config;
         Ok(())
     }
@@ -119,7 +153,7 @@ impl AppState {
             stream_key: stream_key.clone(),
             app_name,
             publisher_addr,
-            started_at: SystemTime::now(),
+            started_at: Utc::now(),
             bitrate: Default::default(),
             status: StreamStatus::Active,
         };
@@ -130,7 +164,55 @@ impl AppState {
         streams.insert(stream_id, stream);
         stream_by_key.insert(stream_key, stream_id);
 
+        let (tx, _rx) = tokio::sync::broadcast::channel(256);
+        self.flv_broadcasters.write().await.insert(
+            stream_id,
+            Arc::new(FlvBroadcaster {
+                tx,
+                video_config: Mutex::new(None),
+                audio_config: Mutex::new(None),
+            }),
+        );
+
         stream_id
+    }
+
+    /// Returns (flv_header, cached_video_config, cached_audio_config, live_receiver)
+    /// for a new HTTP-FLV viewer, or None if the stream doesn't exist.
+    pub async fn flv_subscribe(
+        &self,
+        stream_id: Uuid,
+    ) -> Option<(Bytes, Option<Bytes>, Option<Bytes>, tokio::sync::broadcast::Receiver<Bytes>)> {
+        let broadcasters = self.flv_broadcasters.read().await;
+        let b = broadcasters.get(&stream_id)?;
+        let video_config = b.video_config.lock().unwrap().clone();
+        let audio_config = b.audio_config.lock().unwrap().clone();
+        let rx = b.tx.subscribe();
+        Some((Bytes::from(crate::flv::flv_header()), video_config, audio_config, rx))
+    }
+
+    /// Broadcasts one FLV-wrapped video tag to any subscribed HTTP-FLV viewers.
+    /// Caches it if it's an AVC sequence header (SPS/PPS), so viewers who join
+    /// mid-stream still get a decodable init segment.
+    pub async fn flv_publish_video(&self, stream_id: Uuid, tag: Bytes, is_sequence_header: bool) {
+        let broadcasters = self.flv_broadcasters.read().await;
+        if let Some(b) = broadcasters.get(&stream_id) {
+            if is_sequence_header {
+                *b.video_config.lock().unwrap() = Some(tag.clone());
+            }
+            let _ = b.tx.send(tag);
+        }
+    }
+
+    /// Same as `flv_publish_video` but for audio (AudioSpecificConfig sequence header).
+    pub async fn flv_publish_audio(&self, stream_id: Uuid, tag: Bytes, is_sequence_header: bool) {
+        let broadcasters = self.flv_broadcasters.read().await;
+        if let Some(b) = broadcasters.get(&stream_id) {
+            if is_sequence_header {
+                *b.audio_config.lock().unwrap() = Some(tag.clone());
+            }
+            let _ = b.tx.send(tag);
+        }
     }
 
     pub async fn register_pipeline(&self, stream_id: Uuid, setup: PipelineSetup) {
@@ -223,7 +305,7 @@ impl AppState {
             for relay in relays.values_mut() {
                 if relay.stream_id == Some(stream_id) {
                     relay.status = RelayStatus::Stopped;
-                    relay.stopped_at = Some(SystemTime::now());
+                    relay.stopped_at = Some(Utc::now());
                     relay.stream_id = None;
                 }
             }
@@ -250,6 +332,10 @@ impl AppState {
                 let _ = sp.pipeline.set_state(gstreamer::State::Null);
             }
         }
+
+        // Drop the FLV broadcaster - closes the channel, which ends every
+        // subscribed HTTP-FLV viewer's response stream.
+        self.flv_broadcasters.write().await.remove(&stream_id);
     }
 
     pub async fn update_stream_bitrate(&self, stream_id: Uuid, bytes: u64) {
@@ -268,7 +354,7 @@ impl AppState {
             stream_key,
             stream_id: None,
             status: RelayStatus::Idle,
-            created_at: SystemTime::now(),
+            created_at: Utc::now(),
             started_at: None,
             stopped_at: None,
             bytes_sent: 0,
@@ -329,7 +415,7 @@ impl AppState {
             let relay = relays.get_mut(&relay_id).ok_or("Relay not found")?;
             relay.stream_id = Some(stream_id);
             relay.status = RelayStatus::Active;
-            relay.started_at = Some(SystemTime::now());
+            relay.started_at = Some(Utc::now());
         }
 
         // Spawn health-monitor / auto-reconnect task.
@@ -377,7 +463,7 @@ impl AppState {
             let mut relays = self.relays.write().await;
             let relay = relays.get_mut(&relay_id).ok_or("Relay not found")?;
             relay.status = RelayStatus::Stopped;
-            relay.stopped_at = Some(SystemTime::now());
+            relay.stopped_at = Some(Utc::now());
             relay.stream_id = None;
         }
 
@@ -618,7 +704,7 @@ async fn monitor_relay(state: AppState, relay_id: Uuid, stream_id: Uuid) {
                                 if let Some(r) = relays.get_mut(&relay_id) {
                                     r.status = RelayStatus::Active;
                                     r.stream_id = Some(stream_id);
-                                    r.started_at = Some(SystemTime::now());
+                                    r.started_at = Some(Utc::now());
                                     r.bytes_sent = 0;
                                 }
                             }
@@ -848,12 +934,95 @@ fn detach_relay_from_pipeline(
 /// Wires a `webrtcbin` branch onto the stream's tees, negotiates with the
 /// browser's SDP offer, and signals `answer_tx` when ICE gathering is done.
 /// Must be called from a blocking thread (`tokio::task::spawn_blocking`).
+/// Finds the RTP payload type number the offering peer used for a given codec on a
+/// given media type (e.g. "video"/"H264" or "audio"/"opus"), by scanning `a=rtpmap`
+/// attributes. Offer/answer negotiation requires the answer to use one of the
+/// payload type numbers the offer actually proposed for that codec - answering
+/// with an arbitrary fixed number the offer never mentioned makes the whole
+/// connection fail rather than just that codec.
+fn find_offered_payload_type(
+    sdp: &gstreamer_sdp::SDPMessage,
+    media_type: &str,
+    codec_name: &str,
+) -> Option<u32> {
+    for i in 0..sdp.medias_len() {
+        let media = sdp.media(i)?;
+        if media.media() != Some(media_type) {
+            continue;
+        }
+        for attr in media.attributes() {
+            if attr.key() != "rtpmap" {
+                continue;
+            }
+            if let Some(value) = attr.value() {
+                let mut parts = value.splitn(2, ' ');
+                if let (Some(pt_str), Some(rest)) = (parts.next(), parts.next()) {
+                    let encoding = rest.split('/').next().unwrap_or("");
+                    if encoding.eq_ignore_ascii_case(codec_name) {
+                        if let Ok(pt) = pt_str.parse::<u32>() {
+                            return Some(pt);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Rewrites an SDP so each video/audio media description lists only the one payload
+/// type we actually negotiated, removing every other payload's format-list entry and
+/// its associated a=rtpmap/a=fmtp/a=rtcp-fb attributes. See call site for why this
+/// matters for real browsers.
+fn narrow_answer_to_negotiated_payload_types(
+    sdp: &mut gstreamer_sdp::SDPMessageRef,
+    video_pt: u32,
+    audio_pt: u32,
+) {
+    for i in 0..sdp.medias_len() {
+        let Some(media) = sdp.media_mut(i) else { continue };
+        let keep_pt = match media.media() {
+            Some("video") => video_pt,
+            Some("audio") => audio_pt,
+            _ => continue,
+        };
+        narrow_media_to_payload_type(media, keep_pt);
+    }
+}
+
+fn narrow_media_to_payload_type(media: &mut gstreamer_sdp::SDPMediaRef, keep_pt: u32) {
+    // Drop every format-list entry (the payload numbers on the m= line) except the
+    // one we're keeping. Iterate in reverse so earlier indices stay valid as we remove.
+    for i in (0..media.formats_len()).rev() {
+        if let Some(fmt) = media.format(i) {
+            if fmt.parse::<u32>().ok() != Some(keep_pt) {
+                let _ = media.remove_format(i);
+            }
+        }
+    }
+
+    // Drop rtpmap/fmtp/rtcp-fb attributes for every other payload type. Their value
+    // always starts with "<payload-type> ...".
+    for i in (0..media.attributes_len()).rev() {
+        let Some(attr) = media.attribute(i) else { continue };
+        if !matches!(attr.key(), "rtpmap" | "fmtp" | "rtcp-fb") {
+            continue;
+        }
+        let Some(value) = attr.value() else { continue };
+        let Some(pt_str) = value.split_whitespace().next() else { continue };
+        if pt_str.parse::<u32>().ok() != Some(keep_pt) {
+            let _ = media.remove_attribute(i);
+        }
+    }
+}
+
 pub fn attach_webrtc_to_pipeline(
     pipeline: &gstreamer::Pipeline,
     videotee: &gstreamer::Element,
     audiotee: &gstreamer::Element,
     stream_id: Uuid,
     offer_sdp: &str,
+    stun_server: &str,
     answer_tx: Arc<Mutex<Option<tokio::sync::oneshot::Sender<anyhow::Result<String>>>>>,
 ) -> anyhow::Result<WebRTCSession> {
     use gstreamer_webrtc::{
@@ -887,13 +1056,24 @@ pub fn attach_webrtc_to_pipeline(
         );
     };
 
+    // Parse the offer up front so we can pay our RTP with whatever payload type
+    // numbers the offering peer actually proposed for H264/OPUS. Browsers pick
+    // their own numbering (Chrome commonly does NOT use 96/111), and an answer
+    // that pays with a number the offer never proposed for that codec makes the
+    // whole ICE/DTLS transport fail outright - not just a dropped track.
+    let sdp_msg = SDPMessage::parse_buffer(offer_sdp.as_bytes())
+        .map_err(|_| anyhow::anyhow!("Failed to parse offer SDP"))?;
+    let video_pt = find_offered_payload_type(&sdp_msg, "video", "H264").unwrap_or(96);
+    let audio_pt = find_offered_payload_type(&sdp_msg, "audio", "opus").unwrap_or(111);
+    tracing::debug!(video_pt, audio_pt, "Negotiating WebRTC RTP payload types from offer");
+
     // --- Build elements ---
     let queue_v  = gstreamer::ElementFactory::make("queue").build()?;
     let h264parse = gstreamer::ElementFactory::make("h264parse")
         .property("config-interval", -1i32)  // inject SPS/PPS before every IDR
         .build()?;
     let rtph264pay = gstreamer::ElementFactory::make("rtph264pay")
-        .property("pt", 96u32)
+        .property("pt", video_pt)
         .build()?;
 
     let queue_a      = gstreamer::ElementFactory::make("queue").build()?;
@@ -902,12 +1082,12 @@ pub fn attach_webrtc_to_pipeline(
     let audioresample = gstreamer::ElementFactory::make("audioresample").build()?;
     let opusenc      = gstreamer::ElementFactory::make("opusenc").build()?;
     let rtpopuspay   = gstreamer::ElementFactory::make("rtpopuspay")
-        .property("pt", 111u32)
+        .property("pt", audio_pt)
         .build()?;
 
     let webrtcbin = gstreamer::ElementFactory::make("webrtcbin")
         .property("bundle-policy", WebRTCBundlePolicy::MaxBundle)
-        .property("stun-server", "stun://stun.l.google.com:19302")
+        .property("stun-server", format!("stun://{}", stun_server))
         .build()?;
 
     // All elements we'll add to the pipeline (for bulk removal later).
@@ -988,8 +1168,6 @@ pub fn attach_webrtc_to_pipeline(
     }
 
     // --- Set remote description (browser's offer) ---
-    let sdp_msg = SDPMessage::parse_buffer(offer_sdp.as_bytes())
-        .map_err(|_| anyhow::anyhow!("Failed to parse offer SDP"))?;
     let offer_desc = WebRTCSessionDescription::new(WebRTCSDPType::Offer, sdp_msg);
 
     let (srd_tx, srd_rx) = std::sync::mpsc::channel::<()>();
@@ -1018,9 +1196,20 @@ pub fn attach_webrtc_to_pipeline(
     });
     webrtcbin.emit_by_name::<()>("create-answer", &[&None::<gstreamer::Structure>, &promise]);
 
-    let answer = ca_rx
+    let mut answer = ca_rx
         .recv()
         .map_err(|e| anyhow::anyhow!("create-answer channel error: {}", e))??;
+
+    // webrtcbin's create-answer copies every payload-type variant the offer proposed
+    // for a codec family we support (e.g. Chrome offers H264 at 5+ different payload
+    // types for different profiles), rather than narrowing to the single one we
+    // actually send. Real browsers enforce strict per-transceiver payload matching
+    // (unlike GStreamer's own rtpbin, which is lenient) - if the browser picks a
+    // payload type from that list other than the one our rtph264pay/rtpopuspay
+    // actually emit, it silently discards every packet: ICE/DTLS connect fine, no
+    // error fires, the video is just never decodable. Narrow the answer down to
+    // exactly the payload types we negotiated before it goes out.
+    narrow_answer_to_negotiated_payload_types(answer.sdp_mut(), video_pt, audio_pt);
 
     // Set local description from this spawn_blocking thread — safe.
     let (sld_tx, sld_rx) = std::sync::mpsc::channel::<()>();
@@ -1074,4 +1263,50 @@ fn detach_webrtc_from_pipeline(session: WebRTCSession) {
     }
 
     tracing::info!(stream_id = %session.stream_id, "WebRTC session detached");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_offered_payload_type;
+
+    const BROWSER_LIKE_OFFER: &str = "v=0\r\n\
+o=- 1 1 IN IP4 0.0.0.0\r\n\
+s=-\r\n\
+t=0 0\r\n\
+a=group:BUNDLE video0 audio1\r\n\
+m=video 9 UDP/TLS/RTP/SAVPF 102 96\r\n\
+c=IN IP4 0.0.0.0\r\n\
+a=mid:video0\r\n\
+a=rtpmap:102 H264/90000\r\n\
+a=fmtp:102 packetization-mode=1\r\n\
+a=rtpmap:96 VP8/90000\r\n\
+a=recvonly\r\n\
+m=audio 9 UDP/TLS/RTP/SAVPF 109\r\n\
+c=IN IP4 0.0.0.0\r\n\
+a=mid:audio1\r\n\
+a=rtpmap:109 opus/48000/2\r\n\
+a=recvonly\r\n";
+
+    #[test]
+    fn finds_offered_h264_payload_type_even_when_not_first() {
+        gstreamer::init().unwrap();
+        let sdp = gstreamer_sdp::SDPMessage::parse_buffer(BROWSER_LIKE_OFFER.as_bytes()).unwrap();
+        assert_eq!(find_offered_payload_type(&sdp, "video", "H264"), Some(102));
+    }
+
+    #[test]
+    fn finds_offered_opus_payload_type_case_insensitively() {
+        gstreamer::init().unwrap();
+        let sdp = gstreamer_sdp::SDPMessage::parse_buffer(BROWSER_LIKE_OFFER.as_bytes()).unwrap();
+        // SDP declares "opus" lowercase; our lookup is called with "opus" too, but
+        // must also match e.g. "OPUS" from other encoders - verified via eq_ignore_ascii_case.
+        assert_eq!(find_offered_payload_type(&sdp, "audio", "OPUS"), Some(109));
+    }
+
+    #[test]
+    fn returns_none_for_codec_not_offered() {
+        gstreamer::init().unwrap();
+        let sdp = gstreamer_sdp::SDPMessage::parse_buffer(BROWSER_LIKE_OFFER.as_bytes()).unwrap();
+        assert_eq!(find_offered_payload_type(&sdp, "video", "AV1"), None);
+    }
 }

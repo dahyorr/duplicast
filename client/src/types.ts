@@ -17,7 +17,10 @@ export interface BitrateStats {
   last_updated: string | null;
 }
 
-export type StreamStatus = 'Active' | 'Inactive' | 'Error';
+export type StreamStatus =
+  | { status: 'active' }
+  | { status: 'inactive' }
+  | { status: 'error'; message: string };
 
 export interface Relay {
   id: string;
@@ -33,7 +36,12 @@ export interface Relay {
   enabled: boolean;
 }
 
-export type RelayStatus = 'Idle' | 'Connecting' | 'Active' | 'Stopped' | 'Error';
+export type RelayStatus =
+  | { status: 'idle' }
+  | { status: 'connecting' }
+  | { status: 'active' }
+  | { status: 'stopped' }
+  | { status: 'error'; message: string };
 
 export interface Stats {
   active_streams: number;
@@ -67,6 +75,7 @@ export interface WebRTCOffer {
 export interface WebRTCAnswer {
   sdp: string;
   type: string;
+  session_id: string;
 }
 
 export interface IceCandidate {
@@ -84,14 +93,10 @@ export interface LogEntry {
 }
 
 export interface Config {
-  listen_addr: string;
   rtmp_port: number;
-  max_bitrate_kbps: number;
   relay_auto_reconnect: boolean;
   relay_reconnect_delay_secs: number;
   relay_reconnect_attempts: number;
-  log_level: string;
-  health_check_interval_secs: number;
-  api_enabled: boolean;
   api_port: number;
+  stun_server: string;
 }

@@ -8,22 +8,24 @@ import type {
   StreamInfo,
   WebRTCOffer,
   WebRTCAnswer,
-  IceCandidate,
   LogEntry,
   Config,
 } from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+// Must match the server's DUPLICAST_API_TOKEN env var. Only needed if that's set;
+// harmless to leave unset for local dev.
+const API_TOKEN = import.meta.env.VITE_API_TOKEN as string | undefined;
 
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
+    ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
   },
 });
 
-// Health & Stats
-export const getHealth = () => api.get('/api/health');
+// Stats
 export const getStats = () => api.get<Stats>('/api/stats');
 
 // Streams
@@ -43,8 +45,11 @@ export const stopRelay = (id: string) => api.post<Relay>(`/api/relays/${id}/stop
 // WebRTC
 export const sendWebRTCOffer = (streamId: string, offer: WebRTCOffer) =>
   api.post<WebRTCAnswer>(`/api/streams/${streamId}/webrtc/offer`, offer);
-export const sendIceCandidate = (streamId: string, candidate: IceCandidate) =>
-  api.post(`/api/streams/${streamId}/webrtc/ice`, candidate);
+export const sendWebRTCHangup = (streamId: string, sessionId: string) =>
+  api.delete(`/api/streams/${streamId}/webrtc/${sessionId}`);
+
+// HTTP-FLV preview (default preview mode - see StreamPreview.tsx)
+export const getFlvUrl = (streamId: string) => `${API_BASE_URL}/api/streams/${streamId}/flv`;
 
 // Logs
 export const getLogs = () => api.get<LogEntry[]>('/api/logs');

@@ -106,6 +106,18 @@ export const useStopRelay = () => {
   });
 };
 
+// Logs
+export const useLogs = () => {
+  return useQuery({
+    queryKey: ['logs'],
+    queryFn: async () => {
+      const { data } = await api.getLogs();
+      return data;
+    },
+    refetchInterval: 5000,
+  });
+};
+
 // Config
 export const useConfig = () => {
   return useQuery({

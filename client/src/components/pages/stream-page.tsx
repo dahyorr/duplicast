@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useStreams } from "@/hooks"
-import { formatBytes, formatUptime, formatBitrate } from "@/lib/mock-data"
+import { formatBytes, formatUptime, formatBitrate } from "@/lib/format"
 import { getStreamStatus } from "@/lib/status-utils"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -179,7 +179,7 @@ export function StreamPage() {
           streamUrl={statusString === "active" ? streamUrl : undefined}
           streamId={stream.id}
           className="lg:col-span-2"
-          autoPlay={false}
+          autoPlay={true}
         />
       </div>
 

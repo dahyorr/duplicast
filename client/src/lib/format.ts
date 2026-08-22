@@ -25,8 +25,3 @@ export function formatUptime(seconds: number): string {
   if (s > 0) parts.push(`${s}s`)
   return parts.join(" ")
 }
-
-export function maskKey(key: string): string {
-  if (key.length <= 8) return "****"
-  return `${"*".repeat(key.length - 4)}${key.slice(-4)}`
-}

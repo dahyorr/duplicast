@@ -14,7 +14,6 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Dialog,
@@ -28,7 +27,7 @@ import {
 import { useRelays, useCreateRelay, useDeleteRelay, useStartRelay, useStopRelay, useStreams } from "@/hooks"
 import { toast } from "sonner"
 import type { Relay } from "@/types"
-import {  formatBytes } from "@/lib/mock-data"
+import {  formatBytes } from "@/lib/format"
 import { getRelayStatus } from "@/lib/status-utils"
 
 
@@ -106,15 +105,7 @@ function RelayCard({
           </div>
         )}
 
-        <div className="flex items-center justify-between border-t border-border pt-3">
-          <div className="flex items-center gap-2">
-            <Switch
-              checked={relay.enabled}
-              disabled
-              aria-label={`${relay.name} enabled status`}
-            />
-            <span className="text-xs text-muted-foreground">{relay.enabled ? "Enabled" : "Disabled"}</span>
-          </div>
+        <div className="flex items-center justify-end border-t border-border pt-3">
           <div className="flex gap-2">
             {canStart && (
               <Button
