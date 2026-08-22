@@ -13,6 +13,13 @@ Cargo.lock
 **/target/
 **/deps/
 **/incremental/
+dist-bundle*/
+*.tar.gz
+
+# Runtime data (config, relay list with encrypted keys) - generated next to
+# the binary at runtime, only present here if run from an unusual CWD.
+duplicast_config.json
+duplicast_relays.json
 
 # IDE
 .vscode/
