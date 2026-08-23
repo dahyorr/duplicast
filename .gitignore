@@ -1,28 +1,46 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+# Rust
+**/*.rs.bk
+*.pdb
 
-node_modules
-dist
-dist-ssr
-*.local
+# Cargo
+Cargo.lock
+**/*-cargo-lock
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
+# Build artifacts
+**/debug/
+**/release/
+**/build/
+**/target/
+**/deps/
+**/incremental/
+dist-bundle*/
+*.tar.gz
+
+# Runtime data (config, relay list with encrypted keys) - generated next to
+# the binary at runtime, only present here if run from an unusual CWD.
+duplicast_config.json
+duplicast_relays.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
 
-src-tauri/hls_output
-src-tauri/data/**
-src-tauri/logs/**
+# Testing
+*.profraw
+*.profdata
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# OS
+Thumbs.db
+.Spotlight-V100
+.Trashes

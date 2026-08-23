@@ -1,0 +1,242 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+jobs:
+  frontend:
+    name: Build frontend (shared across all OS builds)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: client
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        working-directory: client
+        run: pnpm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: client/dist
+
+  native:
+    name: Native build (${{ matrix.os }})
+    needs: frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: duplicast-core-linux-x86_64
+          - os: macos-latest
+            artifact_name: duplicast-core-macos-arm64
+          - os: windows-latest
+            artifact_name: duplicast-core-windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GStreamer (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav
+
+      - name: Install GStreamer (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav
+
+      - name: Cache GStreamer (Windows)
+        if: runner.os == 'Windows'
+        id: gst-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\gstreamer
+          key: gstreamer-windows-1.26.9
+
+      # Only hits the flaky gstreamer.freedesktop.org download server on a
+      # cache miss - once one run succeeds, later runs reuse the cached
+      # install and don't care if that server is down again.
+      - name: Install GStreamer (Windows)
+        if: runner.os == 'Windows' && steps.gst-cache.outputs.cache-hit != 'true'
+        run: |
+          choco install gstreamer --version=1.26.9 -y
+          choco install gstreamer-devel --version=1.26.9 -y
+
+      - name: Set GStreamer env vars (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          echo "PKG_CONFIG_PATH=C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" >> $env:GITHUB_ENV
+          echo "C:\gstreamer\1.0\msvc_x86_64\bin" >> $env:GITHUB_PATH
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: cargo build --release
+        working-directory: core
+        run: cargo build --release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: client/dist
+
+      - name: Package (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p pkg
+          cp core/target/release/duplicast-core pkg/
+          cp -r client/dist pkg/dist
+          tar -C pkg -czf ${{ matrix.artifact_name }}.tar.gz .
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir pkg
+          copy core\target\release\duplicast-core.exe pkg\
+          xcopy /E /I client\dist pkg\dist
+          Compress-Archive -Path pkg\* -DestinationPath ${{ matrix.artifact_name }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            *.tar.gz
+            *.zip
+
+  bundled-linux:
+    name: Bundled build (Linux, no system GStreamer required)
+    needs: frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GStreamer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav \
+            pkg-config
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: cargo build --release
+        working-directory: core
+        run: cargo build --release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: client/dist
+
+      - name: Bundle
+        run: ./scripts/bundle-linux.sh dist-bundle-linux
+
+      - name: Archive
+        run: tar -C dist-bundle-linux -czf duplicast-core-linux-x86_64-bundled.tar.gz .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: duplicast-core-linux-x86_64-bundled
+          path: duplicast-core-linux-x86_64-bundled.tar.gz
+
+  bundled-macos:
+    name: Bundled build (macOS, no system GStreamer required)
+    needs: frontend
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GStreamer and dylibbundler
+        run: |
+          brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly dylibbundler
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: cargo build --release
+        working-directory: core
+        run: cargo build --release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: client/dist
+
+      - name: Bundle
+        run: ./scripts/bundle-macos.sh dist-bundle-macos
+
+      - name: Archive
+        run: tar -C dist-bundle-macos -czf duplicast-core-macos-arm64-bundled.tar.gz .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: duplicast-core-macos-arm64-bundled
+          path: duplicast-core-macos-arm64-bundled.tar.gz
+
+  release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [native, bundled-linux, bundled-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
